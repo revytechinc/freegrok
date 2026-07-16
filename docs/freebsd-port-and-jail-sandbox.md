@@ -38,7 +38,7 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 | Phase 0 | Plan doc on branch |
 | Phase 1a | FreeBSD rg skip, jail stubs, nono = linux\|macos only; macOS `cargo check` was green in a prior session |
 | FreeBSD platform verify | **Not done** — waiting for an agent on FreeBSD |
-| Ports collection (`cloudbsd-ports`) | **Not started** — clone + isolated branch; port skeleton TBD |
+| Ports collection (fork of freebsd/freebsd-ports) | Branch `wip/grok-build-port` on cloudbsd-ports; port skeleton TBD |
 
 Update this table when you complete work (date, host OS, rustc, pass/fail).
 
@@ -187,17 +187,23 @@ Phase 2 still needed: real `jail_reexec_command` / helper, nullfs denies, child 
 
 ---
 
-## Phase 3 — Ports collection (CloudBSD / FreeBSD ports)
+## Phase 3 — Ports collection (CloudBSD fork of FreeBSD ports)
 
-### Separate repo — do not assume checkout
-
-Ports work is **not** inside the `grok-build` git tree. It lives in:
+### What the ports repo is
 
 | Item | Value |
 |------|--------|
-| Remote | `git@github.com:cloudbsdorg/cloudbsd-ports.git` |
-| Typical local path | `~/git/cloudbsd-ports` (operator preference; **not guaranteed**) |
-| Isolation branch | **`wip/grok-build-port`** (create if missing; never commit port work on `main`/`master` directly) |
+| **Upstream (canonical FreeBSD ports)** | https://github.com/freebsd/freebsd-ports |
+| **Working fork (push target)** | `git@github.com:cloudbsdorg/cloudbsd-ports.git` |
+| Relationship | **cloudbsd-ports is a fork of freebsd/freebsd-ports** (layout, categories, `Mk/`, `USES=cargo`, etc. match FreeBSD ports) |
+| Typical local path | `~/git/cloudbsd-ports` (operator preference; **not guaranteed on the next agent**) |
+| Isolation branch | **`wip/grok-build-port`** (create if missing; never commit port work on `main` directly) |
+
+Treat the tree as a normal FreeBSD ports tree. Prefer FreeBSD Handbook / Porter’s Handbook conventions. Sync/rebase from upstream FreeBSD when needed; land CloudBSD-specific work on the fork branch.
+
+### Separate repo — do not assume checkout
+
+Ports work is **not** inside the `grok-build` git tree.
 
 **If the ports tree is missing** (common for the next agent):
 
@@ -212,23 +218,27 @@ elif ! git -C cloudbsd-ports rev-parse HEAD >/dev/null 2>&1; then
   exit 1
 fi
 cd cloudbsd-ports
+# Track FreeBSD upstream for merges/rebases (read-only; push goes to origin/fork)
+git remote add freebsd https://github.com/freebsd/freebsd-ports.git 2>/dev/null \
+  || git remote set-url freebsd https://github.com/freebsd/freebsd-ports.git
 git fetch origin
-# Default branch may be main or master:
-git checkout main 2>/dev/null || git checkout master
-git pull --ff-only
+git fetch freebsd   # optional unless syncing with FreeBSD
+git checkout main
+git pull --ff-only origin main
 git checkout -b wip/grok-build-port   # or: git checkout wip/grok-build-port if it exists
 ```
 
 **If the tree already exists** but may be mid-clone (incomplete HEAD): wait until `git log -1` works, then create/checkout `wip/grok-build-port`.
 
-**Two remotes / two branches to keep straight:**
+**Remotes and branches to keep straight:**
 
-| Repo | Branch | Purpose |
-|------|--------|---------|
-| `grok-build` (this project) | `freebsd-port-plan` | Source fixes, jail stubs, this plan |
-| `cloudbsdorg/cloudbsd-ports` | `wip/grok-build-port` | Port Makefile / distinfo / pkg-descr only |
+| Repo | Remote name | Branch | Purpose |
+|------|-------------|--------|---------|
+| `grok-build` | (its origin) | `freebsd-port-plan` | Source fixes, jail stubs, this plan |
+| `cloudbsdorg/cloudbsd-ports` | `origin` | `wip/grok-build-port` | Port Makefile / distinfo / pkg-descr (push here) |
+| `freebsd/freebsd-ports` | `freebsd` (add locally) | `main` | Upstream FreeBSD ports — fetch/merge only, do not push |
 
-Push ports work to **cloudbsd-ports** origin on `wip/grok-build-port` when ready (do not mix into grok-build PRs).
+Push ports work to **origin** (`cloudbsdorg/cloudbsd-ports`) on **`wip/grok-build-port`**. Do not mix into grok-build PRs. Do not push to `freebsd/freebsd-ports` unless you have explicit upstream commit rights and intent.
 
 ### Port design (Grok Build)
 
@@ -276,12 +286,14 @@ uname -srm && rustc -vV
 cd /path/to/grok-build   # or this worktree
 git fetch origin && git checkout freebsd-port-plan && git pull --ff-only
 
-# 3) Ports tree (may be absent — clone if needed)
+# 3) Ports tree = CloudBSD fork of https://github.com/freebsd/freebsd-ports
+#    (may be absent — clone fork if needed)
 if [ ! -d ~/git/cloudbsd-ports/.git ]; then
   mkdir -p ~/git && git clone git@github.com:cloudbsdorg/cloudbsd-ports.git ~/git/cloudbsd-ports
 fi
 cd ~/git/cloudbsd-ports
 git rev-parse HEAD >/dev/null 2>&1 || { echo "ports clone incomplete"; exit 1; }
+git remote add freebsd https://github.com/freebsd/freebsd-ports.git 2>/dev/null || true
 git checkout wip/grok-build-port 2>/dev/null || git checkout -b wip/grok-build-port
 
 # 4a) If FreeBSD → full grok-build verify + later port build
