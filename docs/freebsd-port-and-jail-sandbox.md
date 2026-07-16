@@ -1,150 +1,211 @@
 # FreeBSD Port + Jail Sandbox Plan (with platform verification)
 
-## Context
+## Handoff for the next agent
 
-Grok Build FreeBSD work lives on branch **`freebsd-port-plan`** (pushed). Phase 0–1a are done on **macOS**. FreeBSD is not verified until a dedicated **Verify the platform** gate passes on a FreeBSD host (or a true FreeBSD target triple).
+**Do not assume you are on macOS.** The previous session authored on Darwin; the next agent may be on **Linux, macOS, FreeBSD, CI, or anything else**.
 
-**Policy:** Do not claim FreeBSD support, green CI, or jail sandbox readiness until **Verify the platform** succeeds on FreeBSD. Authoring on macOS is allowed; verification is not.
+1. **Start with Phase V.1 — identify your host** (`uname`, `rustc -vV`). That decides what you are allowed to claim and which steps to run.
+2. Checkout branch **`freebsd-port-plan`** (tracks `origin/freebsd-port-plan`).
+3. Read **Status** below, then run only the work your host allows (table in V.1).
+4. When you change the plan or code: **commit and push** this branch when done (unless told not to).
+5. **Never** mark FreeBSD “verified” unless V.1 says you are actually on FreeBSD (or a true `*-unknown-freebsd` native build with full V.2–V.4).
+
+| Your host | You may | You must not |
+|-----------|---------|--------------|
+| **FreeBSD** | Full Phase V, 1b compile fixes, jail e2e, ports work | Skip V and claim green |
+| **Linux** | Author patches, Linux regression (`cargo check`), optional CI | Claim FreeBSD verified; run FreeBSD-only sysctls as pass |
+| **macOS** | Author patches, macOS regression | Claim FreeBSD verified |
+| **Other / unknown** | Re-run V.1; treat as authoring unless FreeBSD | Invent platform support |
+
+**Target product platform** for this workstream is **FreeBSD**. Authoring hosts only keep the tree buildable and implement `cfg(target_os = "freebsd")` safely.
 
 ---
 
-## Status (as of last push)
+## Context
+
+Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a are done (authored on macOS). FreeBSD is not verified until **Phase V — Verify the platform** passes on a FreeBSD host.
+
+**Policy:** Do not claim FreeBSD support, green FreeBSD CI, or jail sandbox readiness until Phase V succeeds **on FreeBSD**. Authoring on Linux/macOS is allowed; FreeBSD verification is not optional and is not portable.
+
+---
+
+## Status
 
 | Item | Status |
 |------|--------|
 | Branch | `freebsd-port-plan` → `origin/freebsd-port-plan` |
-| Phase 0 | Plan doc committed |
-| Phase 1a | Done: FreeBSD rg skip, jail stubs, nono = linux\|macos only, macOS `cargo check` green |
-| Commits | `cac2fac` (docs) · `0ea1408` (scaffolding) |
-| FreeBSD platform verify | **Not done** |
+| Phase 0 | Plan doc on branch |
+| Phase 1a | FreeBSD rg skip, jail stubs, nono = linux\|macos only; macOS `cargo check` was green in a prior session |
+| FreeBSD platform verify | **Not done** — waiting for an agent on FreeBSD |
 
-**This host (macOS) snapshot:** Darwin arm64 · `rustc` host `aarch64-apple-darwin` · `protoc` + `rg` present via Homebrew. This satisfies **authoring host** checks only.
+Update this table when you complete work (date, host OS, rustc, pass/fail).
 
 ---
 
 ## Phase V — Verify the platform (required gate)
 
-Run this **first** on any machine that will execute FreeBSD work, and **always** on a FreeBSD system before marking the port ready.
+**Every agent session that touches FreeBSD port work should start here**, regardless of OS.
 
-### V.1 Identify the host
-
-```sh
-uname -srm                    # expect FreeBSD <version> <arch> for real verify
-rustc -vV                     # host: must be *-unknown-freebsd for native
-echo "CARGO_CFG: $(rustc --print cfg | grep target_os)"
-```
-
-| Result | Meaning | Allowed work |
-|--------|---------|--------------|
-| `Darwin` / `apple-darwin` | Authoring host | Patch + macOS regression only |
-| `Linux` | Authoring / CI | Same as macOS for FreeBSD claims |
-| `FreeBSD` / `*-unknown-freebsd` | **Target platform** | Full verify + jail e2e |
-
-Record: OS, version, arch (`amd64`/`arm64`), rustc version (≥ pin in `rust-toolchain.toml`, currently **1.92** channel intent).
-
-### V.2 Toolchain and build deps (FreeBSD)
+### V.1 Identify the host (always first)
 
 ```sh
-rustc --version               # >= workspace pin
-protoc --version              # system protobuf; $PROTOC if non-default path
-rg --version                  # textproc/ripgrep (no bundled rg on FreeBSD)
-pkg info protobuf ripgrep rust 2>/dev/null || true
+uname -srm
+rustc -vV                     # look at "host:"
+rustc --print cfg | grep target_os || true
+hostname
+date -u
 ```
 
-| Check | Pass criteria |
-|-------|----------------|
-| Rust | Builds edition 2024 / matches pin |
-| protoc | On PATH or `PROTOC` set; `bin/protoc` dotslash **not** required |
-| ripgrep | On PATH; release build does **not** hit GitHub rg download |
-| Network at build | Offline/vendor path works for ports (when packaging) |
+| `uname -s` / rustc host | Role | Allowed work this session |
+|-------------------------|------|---------------------------|
+| `FreeBSD` / `*-unknown-freebsd` | **Target platform** | Full V.2–V.4, 1b, jail e2e, ports |
+| `Linux` / `*-unknown-linux-*` | Authoring / CI | Patches + Linux `cargo check`; FreeBSD claims stay pending |
+| `Darwin` / `*-apple-darwin` | Authoring | Patches + macOS `cargo check`; FreeBSD claims stay pending |
+| Anything else | Unknown | Document host; author only until classified |
 
-### V.3 Cargo platform compile
+Record in your notes or a short commit: OS, version, arch, rustc version (workspace pin intent is **1.92+** / edition **2024** per `rust-toolchain.toml`).
 
-On FreeBSD (native preferred):
+### V.2 Toolchain and build deps
+
+**On FreeBSD (target verify):**
+
+```sh
+rustc --version
+protoc --version              # or: export PROTOC=/usr/local/bin/protoc
+rg --version                  # pkg: textproc/ripgrep — no bundled rg on FreeBSD
+pkg info protobuf ripgrep 2>/dev/null || true
+```
+
+**On Linux / macOS (authoring only):**
+
+```sh
+rustc --version
+protoc --version || true      # needed for proto crates; install if missing
+rg --version || true
+# Linux: may auto-bundle rg in release builds (supported triple)
+# macOS: same
+# FreeBSD-specific: system protoc/rg required; bin/protoc dotslash has no FreeBSD asset
+```
+
+| Check | FreeBSD pass | Linux/macOS pass (authoring) |
+|-------|--------------|------------------------------|
+| Rust | Builds pin / edition 2024 | Same for local check |
+| protoc | System or `$PROTOC` | System / brew / apt as available |
+| ripgrep | On PATH; **no** GitHub bundle in release | Bundle OK on supported triples |
+| Offline ports build | Required later for ports | N/A |
+
+### V.3 Cargo compile
+
+**FreeBSD (required for platform verify):**
 
 ```sh
 export PROTOC="${PROTOC:-$(command -v protoc)}"
 cargo check -p xai-grok-sandbox -p xai-grok-pager-bin
 cargo build -p xai-grok-pager-bin --release
-# must not error: "Unsupported target for ripgrep bundling: freebsd-..."
+# must NOT error: Unsupported target for ripgrep bundling: freebsd-...
 ```
 
 | Check | Pass criteria |
 |-------|----------------|
 | `xai-grok-sandbox` | Compiles **without** `nono`/`landlock` |
-| `jail` module | Linked on FreeBSD (`cfg(target_os = "freebsd")`) |
-| Release build | Completes; uses system `rg` |
-| macOS still green | On Darwin: `cargo check -p xai-grok-pager-bin` after patches |
+| `jail` module | Built under `cfg(target_os = "freebsd")` |
+| Release | Completes using system `rg` |
 
-Optional (from macOS only if FreeBSD sysroot/linker exists — usually **skip**):
+**Linux or macOS (regression only — does not complete Phase V):**
 
 ```sh
-rustup target add x86_64-unknown-freebsd   # incomplete without FreeBSD SDK
+cargo check -p xai-grok-sandbox -p xai-grok-pager-bin
+# After FreeBSD-targeted patches, keep your host green
 ```
 
-### V.4 Runtime platform behavior
+Cross-compile to FreeBSD from Linux/macOS usually needs a FreeBSD sysroot/linker — **do not treat partial cross as Phase V pass** unless fully linked and smoke-tested.
+
+### V.4 Runtime (FreeBSD only for pass)
 
 ```sh
-# OS markers
 sysctl security.jail.jailed                 # 0 outside jail, 1 inside
-# After starting grok with a non-off sandbox profile (Phase 2):
-# env should eventually set __GROK_INSIDE_JAIL when re-exec works
+# Phase 2: after jail re-exec, expect __GROK_INSIDE_JAIL=1
 ```
 
-| Check | Pass criteria (Phase 1a) | Pass criteria (Phase 2) |
-|-------|--------------------------|-------------------------|
-| Sandbox apply without helper | Starts; logs jail not active; **no crash** | N/A |
-| Sandbox apply with helper | N/A | Re-exec; `__GROK_INSIDE_JAIL=1`; denies hold |
-| Child network restrict | N/A | Tool children cannot open TCP when profile restricts net |
-| Auto-update | Soft-fail / unsupported OS (acceptable) | Same until FreeBSD artifacts exist |
-| TUI smoke | Launch + shell tool + file edit | Same under jail |
+| Check | Phase 1a (current code) | Phase 2 (helper) |
+|-------|-------------------------|------------------|
+| Sandbox without helper | Starts; logs not active; **no crash** | — |
+| Sandbox with helper | — | Re-exec; denies; marker set |
+| Child network restrict | — | Jail net params when profile restricts |
+| Auto-update | Soft-fail unsupported OS OK | Until FreeBSD artifacts exist |
+| TUI smoke | Launch + shell + edit | Same under jail |
 
-### V.5 Platform matrix (record results)
+Skip V.4 on Linux/macOS (or only note “N/A — not FreeBSD”).
 
-| Capability | macOS (author) | FreeBSD (target) |
-|------------|----------------|------------------|
-| `cargo check` pager-bin | Required green | Required green |
-| Landlock/Seatbelt (`nono`) | Yes | **No** (by design) |
-| Jail re-exec | N/A | Required for sandbox parity |
-| Bundled rg | Yes (download) | **No** — system `rg` |
-| Bundled protoc dotslash | Often yes | **No** — system `protoc` |
-| Official auto-update binary | Yes | No until channel exists |
+### V.5 Platform matrix (fill after runs)
 
-Fill this table in `docs/freebsd-port-and-jail-sandbox.md` after each FreeBSD run (date, host, rustc, pass/fail).
+| Capability | Linux (author) | macOS (author) | FreeBSD (target) |
+|------------|----------------|----------------|------------------|
+| `cargo check` pager-bin | Should stay green | Should stay green | **Required green** |
+| Landlock / Seatbelt (`nono`) | Landlock | Seatbelt | **No** (jail instead) |
+| Jail re-exec | N/A | N/A | Required for sandbox parity |
+| Bundled rg in release | Often yes | Often yes | **No** — system `rg` |
+| `bin/protoc` dotslash | Maybe | Maybe | **No** — system `protoc` |
+| Official auto-update binary | Yes (linux) | Yes | Not until channel exists |
+| **Phase V complete?** | No | No | Yes only if V.1–V.4 pass |
+
+Append a short log under **Verification log** at the bottom of this file when you run checks.
 
 ### V.6 Fail the gate if
 
-- Host is not FreeBSD but someone claims “FreeBSD verified”
-- Release build tries to download rg or fails unsupported triple
-- Sandbox panics on FreeBSD instead of degrade
-- `nono`/`landlock` pulled in as FreeBSD deps (link/compile failure)
+- Host is not FreeBSD but FreeBSD is claimed “verified”
+- FreeBSD release build downloads rg or hits unsupported triple
+- Sandbox panics on FreeBSD instead of degrading
+- `nono`/`landlock` become FreeBSD compile dependencies
 
 ---
 
-## Remaining phases (after V passes on FreeBSD)
+## What is already implemented (Phase 1a)
 
-| Phase | Where | Work |
-|-------|--------|------|
-| **1b** | FreeBSD | Fix any compile breaks found in V.3 |
-| **2** | Author anywhere; verify FreeBSD | Jail helper, nullfs denies, child net jails |
-| **3** | FreeBSD | Ports packaging (`USES=cargo`, deps) |
+| Change | Path |
+|--------|------|
+| Skip rg auto-bundle on FreeBSD | `crates/codegen/xai-grok-shell/build.rs` |
+| Jail stubs + markers + degrade `apply` | `crates/codegen/xai-grok-sandbox/src/jail.rs`, `lib.rs` |
+| `nono` only on linux \| macos | `xai-grok-sandbox/Cargo.toml` + cfgs |
+| `is_inside_os_sandbox()` | bwrap **or** jail |
+
+Phase 2 still needed: real `jail_reexec_command` / helper, nullfs denies, child net jails.
+
+---
+
+## Remaining phases
+
+| Phase | Where to run | Work |
+|-------|--------------|------|
+| **V** | FreeBSD for pass; any host for V.1 | Platform verify gate |
+| **1b** | FreeBSD | Fix compile breaks from V.3 |
+| **2** | Author on any OS; **verify on FreeBSD** | Jail helper, denies, child net |
+| **3** | FreeBSD | Ports (`USES=cargo`, deps) |
 | **4** | Later | Capsicum, crash ucontext, update channel |
 
 ---
 
-## Immediate next actions (this repo, after approval)
+## Suggested first commands for the next agent
 
-1. **Update** `docs/freebsd-port-and-jail-sandbox.md` with the full **Phase V — Verify the platform** section (and status table reflecting push already done).
-2. **Commit and push** on `freebsd-port-plan` (user wants commit+push when plan work is done).
-3. Do **not** run FreeBSD e2e on this Darwin host — document V results as “pending FreeBSD host”.
+```sh
+# 1) Who am I?
+uname -srm && rustc -vV
+
+# 2) Right branch
+git fetch origin && git checkout freebsd-port-plan && git pull --ff-only
+
+# 3a) If FreeBSD → full verify
+# export PROTOC=...; cargo check -p xai-grok-sandbox -p xai-grok-pager-bin
+
+# 3b) If Linux or macOS → stay green + author only
+# cargo check -p xai-grok-sandbox -p xai-grok-pager-bin
+```
 
 ---
 
-## Summary
+## Verification log
 
-| Question | Answer |
-|----------|--------|
-| Missing from plan before? | Explicit **Verify the platform** gate |
-| What is it? | Host identity, deps, compile, runtime, matrix — FreeBSD required for pass |
-| Phase 1a? | Done + pushed; does **not** replace platform verify |
-| Next code change | Doc update + commit/push only (unless FreeBSD host available) |
+| Date (UTC) | Host | rustc host | Result | Notes |
+|------------|------|------------|--------|-------|
+| (prior) | Darwin arm64 | aarch64-apple-darwin | Authoring only | Phase 1a + docs; FreeBSD V **pending** |
+| | | | | *Next agent: add a row* |
