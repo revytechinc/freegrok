@@ -1,4 +1,9 @@
-//! Per-child seccomp network filter. No-op on non-Linux.
+//! Per-child network restriction.
+//!
+//! Linux: seccomp BPF filter blocking network syscalls.
+//! FreeBSD: no-op here; Phase 2 will restrict children via jail `ip4`/`ip6`
+//! params when `should_restrict_child_network()` is true.
+//! Other OS: no-op.
 
 /// Install seccomp BPF filter blocking network syscalls.
 ///

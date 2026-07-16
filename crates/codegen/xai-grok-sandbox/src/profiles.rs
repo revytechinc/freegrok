@@ -3,19 +3,19 @@
 //! A custom profile's `deny` list is kernel-enforced (read + write/rename) on
 //! both platforms.
 
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 use nono::{AccessMode, CapabilitySet};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 use crate::deny::{
     apply_deny_globs_to_capability_set, apply_deny_paths_to_capability_set, effective_deny_paths,
     partition_deny_entries,
 };
 use crate::paths::grok_home;
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 use crate::paths::{DEVICE_DIRS, DEVICE_FILES};
 use crate::paths::{essential_writable_paths, essential_writable_paths_minimal};
 
@@ -70,6 +70,19 @@ pub enum ProfileName {
 impl ProfileName {
     pub(crate) fn restricts_network(&self) -> bool {
         matches!(self, Self::ReadOnly | Self::Strict)
+    }
+
+    /// Resolve network restriction from config (handles Custom profiles).
+    pub fn restricts_network_resolved(&self, config: &SandboxConfig) -> bool {
+        match self {
+            Self::ReadOnly | Self::Strict => true,
+            Self::Workspace | Self::Devbox | Self::Off => false,
+            Self::Custom(name) => config
+                .profiles
+                .get(name)
+                .and_then(|p| p.restrict_network)
+                .unwrap_or(false),
+        }
     }
 }
 
@@ -171,7 +184,7 @@ fn load_config_file(path: &Path) -> Option<SandboxConfig> {
 
 impl ProfileName {
     /// Convert this profile into a nono `CapabilitySet` for the given workspace.
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     pub fn to_capability_set(&self, workspace: &Path) -> anyhow::Result<CapabilitySet> {
         let config = load_sandbox_config(workspace);
         self.to_capability_set_with_config(workspace, &config)
@@ -181,7 +194,7 @@ impl ProfileName {
     ///
     /// A custom profile's own `deny` list is kernel-enforced (read + write/rename)
     /// on top of the base profile.
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     pub fn to_capability_set_with_config(
         &self,
         workspace: &Path,
@@ -195,7 +208,7 @@ impl ProfileName {
         Self::capability_set_from_profile(workspace, &profile)
     }
 
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     pub(crate) fn capability_set_from_profile(
         workspace: &Path,
         profile: &SandboxProfile,
@@ -582,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn strict_allowlist_includes_run_and_var_when_present() {
         // Regression: /run (resolv realpath) + /var (NSS/SSSD) when present.
         let workspace = std::env::temp_dir();
@@ -607,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn base_profile_capability_set_builds() {
         // A base profile with no `deny` builds a CapabilitySet without erroring.
         let workspace = std::env::current_dir().unwrap();
@@ -617,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn custom_profile_from_config() {
         let workspace = std::env::current_dir().unwrap();
         let config = SandboxConfig {
@@ -639,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn custom_extends_devbox_has_no_data_in_deny() {
         // Regression: devbox excludes /data via a local list, not profile.deny, so
         // a custom profile extending devbox must not inherit /data into the kernel
@@ -667,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn custom_profile_not_found() {
         let workspace = std::env::current_dir().unwrap();
         let config = SandboxConfig::default();
@@ -786,7 +799,7 @@ read_write = ["/tmp/ci-artifacts"]
     }
 
     #[test]
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn extends_off_returns_err_not_panic() {
         let workspace = std::env::current_dir().unwrap();
         let config = SandboxConfig {
@@ -812,7 +825,7 @@ read_write = ["/tmp/ci-artifacts"]
     }
 
     #[test]
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn resolve_off_returns_err_not_panic() {
         let workspace = std::env::current_dir().unwrap();
         let err = ProfileName::Off

@@ -5,17 +5,21 @@
     unreachable_code,
     dead_code
 )]
-//! OS-level sandboxing for Grok Build via [nono](https://crates.io/crates/nono).
+//! OS-level sandboxing for Grok Build.
 //!
 //! Applied once at process startup. Covers in-process `tokio::fs` calls
 //! and child processes. Network is left open at the process level (agent
-//! needs LLM API); child network is blocked per-subprocess via seccomp.
+//! needs LLM API); child network is blocked per-subprocess (Linux seccomp;
+//! FreeBSD: planned jail net params).
 //!
-//! The `enforce` feature (on by default) pulls in `nono` for
-//! kernel-enforced sandboxing (Landlock/Seatbelt). When disabled, the
-//! crate still provides lightweight helpers (`log_violation`,
-//! `should_restrict_child_network`, `child_net`) that compile on all
-//! targets including musl.
+//! The `enforce` feature (on by default) enables:
+//! - **Linux / macOS:** [nono](https://crates.io/crates/nono) (Landlock/Seatbelt)
+//!   plus Linux bwrap re-exec for deny bind-overs
+//! - **FreeBSD:** jail re-exec (`jail` module; helper-backed in Phase 2)
+//!
+//! When disabled, the crate still provides lightweight helpers
+//! (`log_violation`, `should_restrict_child_network`, `child_net`) that
+//! compile on all targets including musl.
 //!
 //! ```rust,no_run
 //! use xai_grok_sandbox::{SandboxManager, ProfileName};
@@ -28,6 +32,8 @@
 //! ```
 pub mod child_net;
 mod deny;
+#[cfg(target_os = "freebsd")]
+mod jail;
 mod logging;
 mod network_policy;
 mod paths;
@@ -38,7 +44,7 @@ pub use network_policy::{
     ChildNetworkPolicy, NETWORK_POLICY_SNAPSHOT_VERSION, NetworkPolicySnapshot,
     NetworkPolicySnapshotError, WebsiteAction, WebsiteOrigin, WebsiteOriginError, WebsitePolicy,
 };
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 use nono::Sandbox;
 pub use profiles::{
     ProfileName, SandboxConfig, SandboxProfile, load_sandbox_config, sandbox_profile_conflicts,
@@ -55,6 +61,54 @@ static AUTO_ALLOW_BASH: AtomicBool = AtomicBool::new(false);
 const BWRAP_ENV_VAR: &str = "__GROK_INSIDE_BWRAP";
 pub fn is_inside_bwrap() -> bool {
     std::env::var(BWRAP_ENV_VAR).is_ok()
+}
+/// Whether this process is inside a FreeBSD jail managed by grok (or any jail).
+/// Always `false` on non-FreeBSD targets.
+pub fn is_inside_jail() -> bool {
+    #[cfg(target_os = "freebsd")]
+    {
+        jail::is_inside_jail()
+    }
+    #[cfg(not(target_os = "freebsd"))]
+    {
+        false
+    }
+}
+/// Whether the process is inside an OS-level re-exec sandbox (bwrap or jail).
+pub fn is_inside_os_sandbox() -> bool {
+    is_inside_bwrap() || is_inside_jail()
+}
+/// FreeBSD twin of [`bwrap_reexec_command`]. Always `None` on non-FreeBSD.
+/// On FreeBSD, returns `None` until the jail helper is implemented (Phase 2).
+pub fn jail_reexec_command(
+    deny_write: &[&str],
+    deny_read: &[&str],
+) -> Option<std::process::Command> {
+    #[cfg(target_os = "freebsd")]
+    {
+        jail::jail_reexec_command(deny_write, deny_read)
+    }
+    #[cfg(not(target_os = "freebsd"))]
+    {
+        let _ = (deny_write, deny_read);
+        None
+    }
+}
+/// FreeBSD twin of [`bwrap_reexec_for_profile`]. Always `None` on non-FreeBSD
+/// until Phase 2 implements deny resolution + helper re-exec.
+pub fn jail_reexec_for_profile(
+    profile: &ProfileName,
+    workspace: &Path,
+) -> Option<std::process::Command> {
+    #[cfg(target_os = "freebsd")]
+    {
+        jail::jail_reexec_for_profile(profile, workspace)
+    }
+    #[cfg(not(target_os = "freebsd"))]
+    {
+        let _ = (profile, workspace);
+        None
+    }
 }
 pub fn trust_bwrap_marker_for_devbox() -> bool {
     false
@@ -144,7 +198,7 @@ impl SandboxManager {
     }
     /// Apply the sandbox to the current process. **Irreversible.**
     /// Degrades gracefully if the platform doesn't support it.
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     pub fn apply(&mut self, workspace: &Path) -> anyhow::Result<()> {
         if self.profile == ProfileName::Off {
             tracing::info!("Sandbox disabled (profile: off)");
@@ -197,12 +251,56 @@ impl SandboxManager {
             }
         }
     }
-    /// Stub when `enforce` feature is disabled — sandbox is not applied.
-    #[cfg(not(all(feature = "enforce", unix)))]
+    /// FreeBSD: jail backend. Phase 1a marks applied only when already inside
+    /// a jail (re-exec succeeded earlier). Otherwise logs and continues without
+    /// sandbox — jail helper re-exec lands in Phase 2.
+    ///
+    /// Does not use nono/`capability_set` (those stay Linux/macOS-only until
+    /// deny planning is shared with the jail helper).
+    #[cfg(all(feature = "enforce", target_os = "freebsd"))]
+    pub fn apply(&mut self, workspace: &Path) -> anyhow::Result<()> {
+        if self.profile == ProfileName::Off {
+            tracing::info!("Sandbox disabled (profile: off)");
+            return Ok(());
+        }
+        let config = profiles::load_sandbox_config(workspace);
+        let resolved = self.profile.resolve_profile(workspace, &config)?;
+        self.net_restricted = resolved.restrict_network;
+        if is_inside_jail() {
+            self.applied = true;
+            tracing::info!(
+                profile = % self.profile,
+                workspace = % workspace.display(),
+                restrict_network_configured = self.net_restricted,
+                "Sandbox active inside FreeBSD jail"
+            );
+            return Ok(());
+        }
+        let details =
+            "FreeBSD jail sandbox not active (helper re-exec not implemented or not privileged)";
+        tracing::warn!(
+            profile = % self.profile,
+            "{details}; continuing without sandbox"
+        );
+        self.logger.log(SandboxEvent::apply_failed(
+            &self.profile.to_string(),
+            workspace,
+            details,
+        ));
+        Ok(())
+    }
+    /// Stub when `enforce` is off or the target has no sandbox backend.
+    #[cfg(not(any(
+        all(
+            feature = "enforce",
+            any(target_os = "linux", target_os = "macos")
+        ),
+        all(feature = "enforce", target_os = "freebsd")
+    )))]
     pub fn apply(&mut self, _workspace: &Path) -> anyhow::Result<()> {
         tracing::info!(
             profile = % self.profile,
-            "Sandbox enforcement unavailable (built without 'enforce' feature)"
+            "Sandbox enforcement unavailable on this target or build"
         );
         Ok(())
     }
@@ -220,7 +318,7 @@ impl SandboxManager {
         });
     }
     /// Check whether the current platform supports sandboxing.
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     pub fn support_info() -> nono::SupportInfo {
         Sandbox::support_info()
     }
@@ -364,7 +462,7 @@ fn is_devbox_based(profile: &ProfileName, config: &SandboxConfig) -> bool {
 /// failure. Keying "requires" on that empty-on-error result would silently
 /// downgrade to fail-open (Linux) when resolution hiccups; this intrinsic check
 /// stays fail-closed.
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 pub fn requires_read_deny(profile: &ProfileName, workspace: &Path) -> bool {
     match profile {
         ProfileName::Custom(name) => {
@@ -378,7 +476,7 @@ pub fn requires_read_deny(profile: &ProfileName, workspace: &Path) -> bool {
     }
 }
 /// Stub when `enforce` is unavailable — nothing is kernel-enforced.
-#[cfg(not(all(feature = "enforce", unix)))]
+#[cfg(not(all(feature = "enforce", any(target_os = "linux", target_os = "macos"))))]
 pub fn requires_read_deny(_profile: &ProfileName, _workspace: &Path) -> bool {
     false
 }
@@ -632,7 +730,7 @@ mod tests {
     }
     /// Create a temp workspace whose `.grok/sandbox.toml` contains `toml_body`.
     /// Returns the workspace path (caller removes it).
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn temp_workspace_with_sandbox_toml(tag: &str, toml_body: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -647,7 +745,7 @@ mod tests {
     /// Create a temp workspace defining a `denytest` profile (extends `workspace`)
     /// with the given `deny` list. `deny_toml` is the raw TOML array body
     /// (e.g. `"\".env\""`).
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn temp_workspace_with_deny(tag: &str, deny_toml: &str) -> PathBuf {
         temp_workspace_with_sandbox_toml(
             tag,
@@ -655,7 +753,7 @@ mod tests {
         )
     }
     #[test]
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn requires_read_deny_only_for_custom_profile_with_deny() {
         let ws = temp_workspace_with_deny("requires-deny", "\".env\"");
         assert!(requires_read_deny(
