@@ -31,6 +31,37 @@ pub fn agent_instance_id() -> String {
         .clone()
 }
 
+/// Platform-specific machine fingerprint used as input to the v5 agent id.
+///
+/// Isolated so FreeBSD (and any OS without `mid`) can compile without that crate.
+fn machine_hash_for_agent_id() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        match std::env::var("HOSTNAME") {
+            Ok(hostname) if !hostname.is_empty() => {
+                let key = format!("agent_id:{hostname}");
+                mid::get(&key).unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
+            }
+            _ => uuid::Uuid::new_v4().to_string(),
+        }
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        mid::get("agent_id").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        // FreeBSD et al.: no mid support. Prefer a stable host identifier when
+        // available, else random UUIDv4 (cached to disk after first compute).
+        match std::env::var("HOSTNAME").or_else(|_| std::env::var("HOST")) {
+            Ok(hostname) if !hostname.is_empty() => {
+                format!("freebsd-host:{hostname}")
+            }
+            _ => uuid::Uuid::new_v4().to_string(),
+        }
+    }
+}
+
 fn load_or_compute_agent_id() -> String {
     let cache_path = xai_grok_config::grok_home().join("agent_id");
 
@@ -47,18 +78,9 @@ fn load_or_compute_agent_id() -> String {
     // - macOS: mid uses unique hardware IDs (serial, UUID, SEID).
     // - Linux: /etc/machine-id is shared across containers from the same base
     //   image, so include $HOSTNAME (container/host name) for uniqueness.
+    // - FreeBSD / others: mid does not support these targets; use UUIDv4.
     // - Fallback: random UUIDv4 if mid or hostname are unavailable.
-    let machine_hash = if cfg!(target_os = "linux") {
-        match std::env::var("HOSTNAME") {
-            Ok(hostname) if !hostname.is_empty() => {
-                let key = format!("agent_id:{hostname}");
-                mid::get(&key).unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
-            }
-            _ => uuid::Uuid::new_v4().to_string(),
-        }
-    } else {
-        mid::get("agent_id").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
-    };
+    let machine_hash = machine_hash_for_agent_id();
     let id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, machine_hash.as_bytes()).to_string();
 
     // Save to cache file with owner-only perms (best effort).
