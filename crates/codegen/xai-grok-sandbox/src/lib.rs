@@ -285,7 +285,7 @@ impl SandboxManager {
         self.logger.log(SandboxEvent::apply_failed(
             &self.profile.to_string(),
             workspace,
-            details,
+            &details,
         ));
         Ok(())
     }
