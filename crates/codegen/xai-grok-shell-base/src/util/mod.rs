@@ -319,7 +319,22 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn is_process_alive_init_process() {
-        assert!(is_process_alive(1));
+        // Linux/macOS: PID 1 is always init. Some FreeBSD environments (odd
+        // jails / PID namespaces) may not expose PID 1 to unprivileged
+        // kill(2); fall back to a live child we control.
+        if is_process_alive(1) {
+            return;
+        }
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        assert!(
+            is_process_alive(child.id()),
+            "live child must report alive when PID 1 is not visible"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
     }
     #[test]
     fn kill_process_by_pid_already_dead_is_ok() {

@@ -214,7 +214,7 @@ pub fn emit_event_with_origin<T: Serialize + Send + 'static>(
         })
         .ok();
 
-    tokio::spawn(async move {
+    let fut = async move {
         let user_ctx = UserContext::collect();
         let request_id = format!("{}-{}", event_name, uuid::Uuid::new_v4());
 
@@ -236,7 +236,22 @@ pub fn emit_event_with_origin<T: Serialize + Send + 'static>(
         }
 
         client::track(&event_name, &request_id, &user_ctx, metadata).await;
-    });
+    };
+
+    // Prefer the current runtime (normal app path). Without a reactor (unit
+    // tests, early startup), spawn would panic — drop the fire-and-forget
+    // emit rather than aborting the process.
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(fut);
+        }
+        Err(_) => {
+            tracing::trace!(
+                event = %event_name,
+                "skip mixpanel emit: no Tokio runtime"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
