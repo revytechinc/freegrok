@@ -2320,6 +2320,28 @@ fn cleanup_queue_dir(queue_dir: &Path, max_age: Duration, stats: Option<&UploadQ
             continue;
         }
         let age = pair_age(&path, &name, &all_names).unwrap_or_else(|| {
+            // Pair-age is preferred. If the companion was present in the
+            // pre-sweep name snapshot but is already gone (deleted earlier in
+            // this same pass when its own age expired), do NOT fall back to
+            // mtime: that can keep a half-pair whose sidecar was expired and
+            // already removed (visit-order flake on FreeBSD/Linux).
+            let name_str = name.to_string_lossy();
+            let partner_gone = if name_str.ends_with(SIDECAR_SUFFIX) {
+                name_str
+                    .strip_suffix(SIDECAR_SUFFIX)
+                    .map(|stem| {
+                        all_names.contains(std::ffi::OsStr::new(stem))
+                            && !queue_dir.join(stem).exists()
+                    })
+                    .unwrap_or(false)
+            } else {
+                let companion = format!("{name_str}{SIDECAR_SUFFIX}");
+                all_names.contains(std::ffi::OsStr::new(companion.as_str()))
+                    && !queue_dir.join(&companion).exists()
+            };
+            if partner_gone {
+                return Duration::MAX;
+            }
             metadata
                 .modified()
                 .ok()
