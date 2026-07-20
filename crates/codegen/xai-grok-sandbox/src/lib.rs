@@ -110,6 +110,22 @@ pub fn jail_reexec_for_profile(
         None
     }
 }
+/// FreeBSD jail backend probe snapshot. Always a "no jail" status off FreeBSD.
+#[cfg(target_os = "freebsd")]
+pub use jail::{JailBackendStatus, jail_backend_status, resolve_jail_helper, sysctl_jail_jailed};
+/// Off FreeBSD: probe helpers report inactive.
+#[cfg(not(target_os = "freebsd"))]
+pub fn jail_backend_status_string() -> String {
+    "jail backend: n/a (not FreeBSD)".to_string()
+}
+#[cfg(target_os = "freebsd")]
+pub fn jail_backend_status_string() -> String {
+    let s = jail_backend_status();
+    format!(
+        "jail backend: inside={} sysctl_jailed={:?} marker={} helper={:?}",
+        s.inside_jail, s.sysctl_jailed, s.marker_env, s.helper
+    )
+}
 pub fn trust_bwrap_marker_for_devbox() -> bool {
     false
 }
