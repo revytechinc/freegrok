@@ -28,19 +28,37 @@ fn main() {
         std::process::exit(1);
     });
 
-    // Check platform support before applying
-    let support = SandboxManager::support_info();
-    println!(
-        "Platform support: {}",
-        if support.is_supported { "YES" } else { "NO" }
-    );
-    println!("Details: {}", support.details);
+    // Check platform support before applying (nono on Linux/macOS; jail on FreeBSD).
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
+    {
+        let support = SandboxManager::support_info();
+        println!(
+            "Platform support: {}",
+            if support.is_supported { "YES" } else { "NO" }
+        );
+        println!("Details: {}", support.details);
 
-    if !support.is_supported {
-        println!("\n⚠️  Sandbox not supported on this platform.");
-        println!("   On macOS: Seatbelt should be available (10.5+)");
-        println!("   On Linux: Landlock requires kernel ≥ 5.13");
-        println!("\n   Tests will show what WOULD happen, but won't enforce.");
+        if !support.is_supported {
+            println!("\n⚠️  Sandbox not supported on this platform.");
+            println!("   On macOS: Seatbelt should be available (10.5+)");
+            println!("   On Linux: Landlock requires kernel ≥ 5.13");
+            println!("\n   Tests will show what WOULD happen, but won't enforce.");
+        }
+    }
+    #[cfg(all(feature = "enforce", target_os = "freebsd"))]
+    {
+        println!("Platform support: FreeBSD jail backend (Phase 1a stubs)");
+        println!("Details: helper re-exec not implemented; apply degrades without crash");
+    }
+    #[cfg(not(any(
+        all(
+            feature = "enforce",
+            any(target_os = "linux", target_os = "macos")
+        ),
+        all(feature = "enforce", target_os = "freebsd")
+    )))]
+    {
+        println!("Platform support: NO (no sandbox backend for this target/build)");
     }
 
     let workspace = std::env::current_dir().expect("failed to get cwd");

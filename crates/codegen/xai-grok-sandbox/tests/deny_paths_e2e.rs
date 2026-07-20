@@ -8,7 +8,12 @@
 //! bwrap when `bwrap` is available. macOS uses Seatbelt platform rules directly
 //! via `SandboxManager::apply`.
 
-#![cfg(all(unix, feature = "enforce"))]
+// Landlock/Seatbelt enforcement only — FreeBSD uses the jail backend (Phase 2)
+// and has no nono `support_info` / capability-set path yet.
+#![cfg(all(
+    feature = "enforce",
+    any(target_os = "linux", target_os = "macos")
+))]
 
 use std::fs;
 use std::path::Path;
