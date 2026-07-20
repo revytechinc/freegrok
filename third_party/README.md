@@ -11,6 +11,14 @@ avoids crates.io yanks. Local patches and upgrade checklists live in each
 crate’s `Cargo.toml` header comments — treat those as the source of truth when
 re-vendoring.
 
+## FreeBSD compile patches
+
+| Crate | Version | Why | Patch |
+|-------|---------|-----|-------|
+| [`sqlite-vec`](./sqlite-vec/) | 0.1.7-alpha.2 | Upstream C defines `uint*_t` from BSD `u_int*_t` without `<sys/types.h>` (breaks FreeBSD) | `build.rs` defines `__wasi__` on FreeBSD to skip that block |
+
+Patched via root `[patch.crates-io]` in `Cargo.toml`.
+
 ## Mermaid layout stack
 
 | Crate | Version | License | Upstream | Full license text |
