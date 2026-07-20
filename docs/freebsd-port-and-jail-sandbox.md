@@ -39,7 +39,7 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 | Phase 1a | FreeBSD rg skip (shell + tools), jail stubs, nono = linux\|macos only |
 | Phase 1b | FreeBSD compile fixes landed (mid, sqlite-vec, workspace_classifier, apply_failed, support_info gates) |
 | FreeBSD platform verify | **V.1–V.3 green** on FreeBSD 15.1 amd64 (2026-07-20); V.4 helper path N/A (Phase 2); TUI interactive smoke TBD |
-| Ports collection (`cloudbsd-ports`) | Branch `wip/grok-build-port`; port skeleton TBD |
+| Ports collection (`cloudbsd-ports`) | Branch `wip/grok-build-port` pushed; `devel/grok-build` skeleton (GROK_SRC local build) |
 
 Update this table when you complete work (date, host OS, rustc, pass/fail).
 
