@@ -24,9 +24,9 @@
 
 ## Context
 
-Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a are done (authored on macOS). FreeBSD is not verified until **Phase V — Verify the platform** passes on a FreeBSD host.
+Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a are done. **Phase V.1–V.3 compile/release gates passed** on FreeBSD 15.1 (`freedev007`, 2026-07-20). Jail helper (Phase 2) and full TUI interactive smoke under jail remain open.
 
-**Policy:** Do not claim FreeBSD support, green FreeBSD CI, or jail sandbox readiness until Phase V succeeds **on FreeBSD**. Authoring on Linux/macOS is allowed; FreeBSD verification is not optional and is not portable.
+**Policy:** Do not claim full FreeBSD product readiness or jail sandbox parity until Phase 2+ succeeds **on FreeBSD**. Compile-green FreeBSD is now recorded in the verification log.
 
 ---
 
@@ -36,8 +36,9 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 |------|--------|
 | Branch | `freebsd-port-plan` → `origin/freebsd-port-plan` |
 | Phase 0 | Plan doc on branch |
-| Phase 1a | FreeBSD rg skip, jail stubs, nono = linux\|macos only; macOS `cargo check` was green in a prior session |
-| FreeBSD platform verify | **Not done** — waiting for an agent on FreeBSD |
+| Phase 1a | FreeBSD rg skip (shell + tools), jail stubs, nono = linux\|macos only |
+| Phase 1b | FreeBSD compile fixes landed (mid, sqlite-vec, workspace_classifier, apply_failed, support_info gates) |
+| FreeBSD platform verify | **V.1–V.3 green** on FreeBSD 15.1 amd64 (2026-07-20); V.4 helper path N/A (Phase 2); TUI interactive smoke TBD |
 | Ports collection (`cloudbsd-ports`) | Branch `wip/grok-build-port`; port skeleton TBD |
 
 Update this table when you complete work (date, host OS, rustc, pass/fail).
@@ -296,5 +297,5 @@ git checkout wip/grok-build-port 2>/dev/null || git checkout -b wip/grok-build-p
 
 | Date (UTC) | Host | rustc host | Result | Notes |
 |------------|------|------------|--------|-------|
-| (prior) | Darwin arm64 | aarch64-apple-darwin | Authoring only | Phase 1a + docs; FreeBSD V **pending** |
-| | | | | *Next agent: add a row* |
+| (prior) | Darwin arm64 | aarch64-apple-darwin | Authoring only | Phase 1a + docs |
+| 2026-07-20 | FreeBSD 15.1-STABLE amd64 (`freedev007`) | x86_64-unknown-freebsd rustc 1.96.1 | **V.1–V.3 pass** | `cargo check -p xai-grok-sandbox -p xai-grok-pager-bin` green; `cargo test -p xai-grok-sandbox` 27+3+doctest ok; `cargo build -p xai-grok-pager-bin --release` → `grok 0.2.106`; system `rg`/`protoc`; no rg auto-bundle; `security.jail.jailed=0`; jail helper still Phase 2 |
