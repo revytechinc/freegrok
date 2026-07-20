@@ -328,9 +328,11 @@ mod nproc_tests {
     }
 
     fn set_nproc_limit(max_threads: u64) -> Result<(), String> {
+        // FreeBSD's rlim_t is i64; Linux uses rlim_t as u64. Convert via cast.
+        let max = max_threads as libc::rlim_t;
         let mut lim = libc::rlimit {
-            rlim_cur: max_threads,
-            rlim_max: max_threads,
+            rlim_cur: max,
+            rlim_max: max,
         };
         // SAFETY: setrlimit only touches the local rlimit for this process.
         let rc = unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &lim) };
@@ -342,9 +344,9 @@ mod nproc_tests {
         if rc != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        if lim.rlim_cur != max_threads {
+        if lim.rlim_cur != max {
             return Err(format!(
-                "setrlimit soft={} want={max_threads}",
+                "setrlimit soft={} want={max}",
                 lim.rlim_cur
             ));
         }

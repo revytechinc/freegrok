@@ -143,24 +143,51 @@ env -0
     // Capture baseline environment (before running .envrc)
     let baseline: HashMap<String, String> = std::env::vars().collect();
 
-    // Run the script and capture output
-    let mut bash_cmd = Command::new("/bin/bash");
-    bash_cmd
-        .arg("-c")
-        .arg(&script)
-        .current_dir(dir)
-        .stdin(std::process::Stdio::null());
-    xai_grok_tools::util::detach_std_command(&mut bash_cmd);
-    let output = bash_cmd.output();
+    // Run the script and capture output. Prefer common FreeBSD/Linux locations
+    // (/bin/bash is Linux; FreeBSD ports install bash at /usr/local/bin/bash).
+    let bash_candidates = [
+        "/bin/bash",
+        "/usr/local/bin/bash",
+        "/usr/bin/bash",
+        "bash",
+    ];
+    let mut last_err: Option<std::io::Error> = None;
+    let mut output = None;
+    for bash in bash_candidates {
+        let mut bash_cmd = Command::new(bash);
+        bash_cmd
+            .arg("-c")
+            .arg(&script)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null());
+        xai_grok_tools::util::detach_std_command(&mut bash_cmd);
+        match bash_cmd.output() {
+            Ok(o) if o.status.success() => {
+                output = Some(o);
+                break;
+            }
+            Ok(o) => {
+                tracing::debug!(
+                    ?envrc_path,
+                    bash,
+                    status = ?o.status,
+                    "bash executed .envrc unsuccessfully; trying next"
+                );
+            }
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
 
     let output = match output {
-        Ok(o) if o.status.success() => o,
-        Ok(_) => {
-            tracing::warn!(?envrc_path, "Failed to execute .envrc via bash");
-            return None;
-        }
-        Err(e) => {
-            tracing::warn!(?envrc_path, ?e, "Failed to run bash for .envrc");
+        Some(o) => o,
+        None => {
+            if let Some(e) = last_err {
+                tracing::warn!(?envrc_path, ?e, "Failed to run bash for .envrc");
+            } else {
+                tracing::warn!(?envrc_path, "Failed to execute .envrc via bash");
+            }
             return None;
         }
     };

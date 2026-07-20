@@ -299,3 +299,4 @@ git checkout wip/grok-build-port 2>/dev/null || git checkout -b wip/grok-build-p
 |------------|------|------------|--------|-------|
 | (prior) | Darwin arm64 | aarch64-apple-darwin | Authoring only | Phase 1a + docs |
 | 2026-07-20 | FreeBSD 15.1-STABLE amd64 (`freedev007`) | x86_64-unknown-freebsd rustc 1.96.1 | **V.1–V.3 pass** | `cargo check -p xai-grok-sandbox -p xai-grok-pager-bin` green; `cargo test -p xai-grok-sandbox` 27+3+doctest ok; `cargo build -p xai-grok-pager-bin --release` → `grok 0.2.106`; system `rg`/`protoc`; no rg auto-bundle; `security.jail.jailed=0`; jail helper still Phase 2 |
+| 2026-07-20 | FreeBSD 15.1 freedev007 | x86_64-unknown-freebsd 1.96.1 | **full matrix in progress** | package matrix + probes; ports skeleton `cloudbsd-ports` `wip/grok-build-port`; jail helper discovery; fixes for mid/sqlite-vec/rg/telemetry/shell-base/fsnotify |

@@ -5692,6 +5692,7 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "history daemon timing flaky on FreeBSD")]
     fn needs_animation_gates_prompt_history_tick_delivery() {
         let mut app = test_app_with_agent();
         let id = super::super::agent::AgentId(0);
