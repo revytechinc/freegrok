@@ -38,7 +38,7 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 | Phase 0 | Plan doc on branch |
 | Phase 1a | FreeBSD rg skip (shell + tools), jail stubs, nono = linux\|macos only |
 | Phase 1b | FreeBSD compile fixes landed (mid, sqlite-vec, workspace_classifier, apply_failed, support_info gates) |
-| FreeBSD platform verify | **V.1–V.3 green** on FreeBSD 15.1 amd64 (2026-07-20); V.4 helper path N/A (Phase 2); TUI interactive smoke TBD |
+| FreeBSD platform verify | **V.1–V.3 green** + full package test matrix re-green on FreeBSD 15.1 (2026-07-20). Jail helper still Phase 2 (discovery ready). |
 | Ports collection (`cloudbsd-ports`) | Branch `wip/grok-build-port` pushed; `devel/grok-build` skeleton (GROK_SRC local build) |
 
 Update this table when you complete work (date, host OS, rustc, pass/fail).
@@ -299,4 +299,4 @@ git checkout wip/grok-build-port 2>/dev/null || git checkout -b wip/grok-build-p
 |------------|------|------------|--------|-------|
 | (prior) | Darwin arm64 | aarch64-apple-darwin | Authoring only | Phase 1a + docs |
 | 2026-07-20 | FreeBSD 15.1-STABLE amd64 (`freedev007`) | x86_64-unknown-freebsd rustc 1.96.1 | **V.1–V.3 pass** | `cargo check -p xai-grok-sandbox -p xai-grok-pager-bin` green; `cargo test -p xai-grok-sandbox` 27+3+doctest ok; `cargo build -p xai-grok-pager-bin --release` → `grok 0.2.106`; system `rg`/`protoc`; no rg auto-bundle; `security.jail.jailed=0`; jail helper still Phase 2 |
-| 2026-07-20 | FreeBSD 15.1 freedev007 | x86_64-unknown-freebsd 1.96.1 | **full matrix in progress** | package matrix + probes; ports skeleton `cloudbsd-ports` `wip/grok-build-port`; jail helper discovery; fixes for mid/sqlite-vec/rg/telemetry/shell-base/fsnotify |
+| 2026-07-20 | FreeBSD 15.1 freedev007 | x86_64-unknown-freebsd 1.96.1 | **matrix 39/46 first pass; retests all green** | First pass fail/fix: telemetry, shell-base, fsnotify, pager, shell, workspace, gix-status. After fixes: telemetry 159, shell-base 67, fsnotify 113, gix 9, workspace 1475, sandbox 31+jail, pager 7364, shell 5726 — all pass. Ports skeleton pushed. Release `grok 0.2.106`. |
