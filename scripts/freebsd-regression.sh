@@ -7,6 +7,9 @@
 # After a successful release build, runs:
 #   target/release/xai-grok-pager doctor --ci
 # (offline product gate; see docs/user-guide/25-doctor.md)
+#
+# For regression against a *make install* binary (recommended):
+#   ./scripts/freebsd-installed-regression.sh
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
