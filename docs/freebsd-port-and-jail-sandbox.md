@@ -186,7 +186,34 @@ Append a short log under **Verification log** at the bottom of this file when yo
 | `nono` only on linux \| macos | `xai-grok-sandbox/Cargo.toml` + cfgs |
 | `is_inside_os_sandbox()` | bwrap **or** jail |
 
-Phase 2 still needed: real `jail_reexec_command` / helper, nullfs denies, child net jails.
+Phase 2 still needed: real `jail_reexec_command` / helper, nullfs denies, optional local-only net.
+
+### Jail provisioning (Phase 2 design)
+
+**Two roles (do not conflate):**
+
+| Role | Purpose | Network |
+|------|---------|---------|
+| **Ephemeral sandbox jail** | bwrap analog: re-exec agent tools with FS denies | **None** by default (console/`jexec`). Linux Landlock/bwrap also need no net for FS isolation |
+| **Provisioned agent jail** | Optional longer-lived rootfs + user for isolation | **Local only** (no public IP; optional `127.0.0.1` SSH later) |
+
+**Base source:** `https://download.freebsd.org/ftp/…` (`ftp.freebsd.org` redirects there).  
+List `releases/{arch}/{arch}/` and `snapshots/{arch}/{arch}/` for `*-RELEASE` / `*-STABLE` / `*-CURRENT`, then `base.txz`.
+
+**Host version rule (15.1-STABLE example):** jail userland **must not exceed host** (no 16.0-CURRENT on 15.1). Prefer matching `15.1-RELEASE`; older 14.x is OK.
+
+**Privilege UX:** before any doas/sudo, show modal/CLI copy explaining why root is needed (create jail, extract base, helper rule). Refuse → continue degraded. Never passwordless silent escalate.
+
+**CLI (landed scaffolding):**
+
+```sh
+grok-build jail status          # offline
+grok-build jail catalog         # online catalog, ✓/✗ vs host
+grok-build jail setup           # dry-run plan + privilege text
+grok-build jail setup --apply   # not implemented yet
+```
+
+**Install methods (planned):** (1) base.txz extract + `jail -c`, (2) helper setuid/doas, (3) optional prebuilt root under `/usr/local/grok/jails/`. User + doas + optional localhost SSH keys after create.
 
 ---
 
@@ -196,7 +223,7 @@ Phase 2 still needed: real `jail_reexec_command` / helper, nullfs denies, child 
 |-------|--------------|------|
 | **V** | FreeBSD for pass; any host for V.1 | Platform verify gate |
 | **1b** | FreeBSD | Fix compile breaks from V.3 |
-| **2** | Author on any OS; **verify on FreeBSD** | Jail helper, denies, child net |
+| **2** | FreeBSD | Jail helper, base catalog, privilege modal, local-only provision, denies |
 | **3** | Ports tree (any host can author Makefile); **build on FreeBSD** | See **Phase 3 — Ports collection** |
 | **4** | Later | Capsicum, crash ucontext, update channel |
 

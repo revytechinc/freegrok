@@ -160,6 +160,8 @@ See ~/.grok/README.md for more information.
     },
     /// Manage git worktrees
     Worktree(crate::worktree_cmd::WorktreeArgs),
+    /// FreeBSD jail catalog / dry-run setup (agent isolation)
+    Jail(crate::jail_cmd::JailArgs),
     /// Expose this workspace to the Computer Hub (via the leader).
     ///
     /// Disabled by default and enabled server-side per account; set

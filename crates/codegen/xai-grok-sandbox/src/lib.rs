@@ -34,6 +34,8 @@ pub mod child_net;
 mod deny;
 #[cfg(target_os = "freebsd")]
 mod jail;
+/// FreeBSD base catalog + host compatibility (download.freebsd.org).
+pub mod jail_catalog;
 mod logging;
 mod network_policy;
 mod paths;

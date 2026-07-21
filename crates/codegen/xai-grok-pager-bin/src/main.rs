@@ -1871,6 +1871,9 @@ async fn async_main() -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
                 return xai_grok_pager::worktree_cmd::run(worktree_args, &agent_config).await;
             }
+            Command::Jail(jail_args) => {
+                return xai_grok_pager::jail_cmd::run(jail_args).await;
+            }
             Command::Workspace(workspace_args) => {
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
