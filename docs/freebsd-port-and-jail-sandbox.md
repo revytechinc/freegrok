@@ -39,7 +39,7 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 | Phase 1a | FreeBSD rg skip (shell + tools), jail stubs, nono = linux\|macos only |
 | Phase 1b | FreeBSD compile fixes landed (mid, sqlite-vec, workspace_classifier, apply_failed, support_info gates) |
 | FreeBSD platform verify | **V.1–V.3 green** + full package test matrix re-green on FreeBSD 15.1 (2026-07-20). Jail helper still Phase 2 (discovery ready). |
-| Ports collection (`cloudbsd-ports`) | Branch `wip/grok-build-port` pushed; `devel/grok-build` skeleton (GROK_SRC local build) |
+| Ports collection | Native port design: `devel/grok-build` → package `grok-build-native`, binary **`grok-build`**. Leave **misc/grok-build** (Linux) alone. FreeBSD ports tree is manual submission only — do not auto-push ports. Offline `CARGO_CRATES` + `nucleo` git dep still open. |
 
 Update this table when you complete work (date, host OS, rustc, pass/fail).
 
@@ -232,22 +232,31 @@ Push ports work to **cloudbsd-ports** origin on `wip/grok-build-port` when ready
 
 ### Port design (Grok Build)
 
-Intended category (adjust to match local ports layout / category policy):
+**Binary / package naming (decided 2026-07-20):**
 
-- Likely: `devel/grok` or `devel/grok-build` (binary name ships as `grok`; artifact is `xai-grok-pager`)
-- Follow existing **Rust / `USES=cargo`** ports in the tree as templates (search for `USES=cargo` under the ports root once cloned)
+| Item | Value | Why |
+|------|--------|-----|
+| Port path | `devel/grok-build` | Native FreeBSD source port |
+| Package base | `grok-build-native` (`PKGNAMESUFFIX=-native`) | Coexists with **misc/grok-build** (Linux brand) |
+| Installed binary | **`bin/grok-build`** | Cargo artifact is still `xai-grok-pager`; install renames. Do **not** install as `grok` |
+| Leave alone | **misc/grok-build** | Official Linux brand binary (`bin/grok` + `bin/agent` via Linuxulator). Do not edit or conflict |
+| Ports tree | FreeBSD ports is **read-only / manual submission** — author port files locally; do not auto-push ports; submit by hand |
+
+Follow existing **Rust / `USES=cargo`** ports as templates (`textproc/ripgrep`, `devel/gitoxide`, …).
 
 | Port piece | Guidance |
 |------------|----------|
 | **BUILD_DEPENDS** | Recent `lang/rust` (≥ pin / edition 2024), `devel/protobuf` (`protoc`) |
+| **LIB_DEPENDS** | `audio/alsa-lib` (`libasound.so`) — linked by the release binary on FreeBSD |
 | **RUN_DEPENDS** | `textproc/ripgrep` — **do not** bundle/download `rg` in the port (see ripgrep section below) |
 | **CARGO_BUILD** | Offline vendor / crates.io distfiles per CloudBSD/FreeBSD cargo port conventions |
 | **Network at build** | Forbidden for ports — no GitHub ripgrep fetch, no live git deps if avoidable |
 | **PROTOC** | `PROTOC=${LOCALBASE}/bin/protoc` in the Makefile |
 | **rg bundle** | FreeBSD already skips auto-bundle in grok-build `build.rs`; rely on system `rg` |
-| **git dep `nucleo`** | May need crate pin / vendor / ports cargo-crates list — fix in grok-build or port patches |
+| **git dep `nucleo`** | May need crate pin / vendor / ports cargo-crates list — fix in grok-build or port patches (`CARGO_FREEBSD_PORTS_SKIP_GIT_UPDATE` blocks bare git deps) |
 | **Sandbox** | Jail backend is stub; port can ship without privileged helper initially |
-| **Install** | Install binary as `grok` (from `xai-grok-pager`) |
+| **Install** | Install as **`grok-build`** (from `xai-grok-pager`). Completions rewrite `grok` → `grok-build` |
+| **Local WIP** | `make GROK_SRC=/path/to/grok-build GROK_REUSE_TARGET=yes` until offline crates land |
 
 ### Ripgrep in the port
 
@@ -300,3 +309,4 @@ git checkout wip/grok-build-port 2>/dev/null || git checkout -b wip/grok-build-p
 | (prior) | Darwin arm64 | aarch64-apple-darwin | Authoring only | Phase 1a + docs |
 | 2026-07-20 | FreeBSD 15.1-STABLE amd64 (`freedev007`) | x86_64-unknown-freebsd rustc 1.96.1 | **V.1–V.3 pass** | `cargo check -p xai-grok-sandbox -p xai-grok-pager-bin` green; `cargo test -p xai-grok-sandbox` 27+3+doctest ok; `cargo build -p xai-grok-pager-bin --release` → `grok 0.2.106`; system `rg`/`protoc`; no rg auto-bundle; `security.jail.jailed=0`; jail helper still Phase 2 |
 | 2026-07-20 | FreeBSD 15.1 freedev007 | x86_64-unknown-freebsd 1.96.1 | **matrix 39/46 first pass; retests all green** | First pass fail/fix: telemetry, shell-base, fsnotify, pager, shell, workspace, gix-status. After fixes: telemetry 159, shell-base 67, fsnotify 113, gix 9, workspace 1475, sandbox 31+jail, pager 7364, shell 5726 — all pass. Ports skeleton pushed. Release `grok 0.2.106`. |
+| 2026-07-21 | FreeBSD 15.1 freedev007 | x86_64-unknown-freebsd 1.96.1 | **port design locked** | Binary name **`grok-build`** (not `grok` / not `xai-grok-pager`). Package `grok-build-native` coexists with misc/grok-build Linux. FreeBSD ports = manual submission; do not push ports from agents. Stage blocked on git `nucleo` under ports cargo SKIP_GIT until crates vendored. |
