@@ -37,7 +37,7 @@ FISHCOMPDIR = $(IPREFIX)/share/fish/vendor_completions.d
 MODELS_DEV_GZ = crates/codegen/xai-grok-models/catalog/models_dev.json.gz
 
 .PHONY: all build release install uninstall doctor check check-pii clean help \
-	preflight require-build ensure-build hooks-install \
+	preflight require-build ensure-build hooks-install tui-regression \
 	_install_all _install_bin _install_completions _install_docs _install_catalog
 
 # Default goal: bare "make" builds the release binary.
@@ -54,6 +54,7 @@ help:
 	@echo "  make check      cargo check"
 	@echo "  make check-pii  best-effort PII/secret gate (staged/changed source)"
 	@echo "  make hooks-install  install git pre-commit → check-pii --staged"
+	@echo "  make tui-regression  isolated PTY TUI smoke (not operator HOME)"
 	@echo "  make clean      cargo clean"
 	@echo ""
 	@echo "PREFIX=$(PREFIX)  BINNAME=$(BINNAME)  PROTOC=$(PROTOC)"
@@ -105,6 +106,10 @@ check-pii:
 
 hooks-install:
 	@sh scripts/git-hooks/install.sh
+
+# Isolated PTY smoke (temp HOME/GROK_HOME, mock inference, no operator keys).
+tui-regression: ensure-build require-build
+	@PAGER_BINARY="$(CURDIR)/$(RELEASE_BIN)" sh scripts/tui-regression.sh
 
 doctor: ensure-build require-build
 	./$(RELEASE_BIN) doctor --ci

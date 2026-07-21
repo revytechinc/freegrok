@@ -307,6 +307,34 @@ fn apply_child_env(cmd: &mut CommandBuilder, env: &[(&str, &str)]) {
     for ssh_var in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
         cmd.env_remove(ssh_var);
     }
+    // Strip operator secrets / cloud keys so PTY e2e never rides the real
+    // developer environment. Tests re-inject what they need via `env`
+    // (e.g. ContentController sets XAI_API_KEY=test-key-for-ci).
+    for secret_var in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_GENAI_API_KEY",
+        "XAI_API_KEY",
+        "GROK_CODE_XAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TOGETHER_API_KEY",
+        "GROQ_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "MISTRAL_API_KEY",
+        "MINIMAX_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SESSION_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "SSH_ASKPASS",
+        "SSH_ASKPASS_REQUIRE",
+    ] {
+        cmd.env_remove(secret_var);
+    }
     // A harness launched under `grok wrap` must not silently confirm clipboard
     // delivery for no-sink scenarios. Explicit sink tests re-inject a marker
     // through `env` after this hygiene pass.
@@ -367,6 +395,9 @@ mod tests {
         for ssh_var in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
             cmd.env(ssh_var, "polluted");
         }
+        for secret_var in ["OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "GH_TOKEN"] {
+            cmd.env(secret_var, "polluted-secret");
+        }
         for color_var in ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
             cmd.env(color_var, "polluted");
         }
@@ -388,6 +419,12 @@ mod tests {
             assert!(
                 cmd.get_env(ssh_var).is_none(),
                 "SSH marker {ssh_var} leaked into the child env"
+            );
+        }
+        for secret_var in ["OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "GH_TOKEN"] {
+            assert!(
+                cmd.get_env(secret_var).is_none(),
+                "secret {secret_var} leaked into the child env"
             );
         }
         for color_var in ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
