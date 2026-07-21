@@ -42,7 +42,7 @@ Root [`Makefile`](../Makefile):
 ```sh
 pkg install rust protobuf ripgrep
 make build && make doctor
-doas make install           # PREFIX=/usr/local BINNAME=grok-build
+make install                # PREFIX=/usr/local if writable, else $HOME/.local
 ```
 
 ---

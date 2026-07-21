@@ -49,7 +49,7 @@ cargo build -p xai-grok-pager-bin --release
 cargo test -p xai-grok-shell --lib doctor::tests::doctor_ci_gate_no_critical_failures
 ```
 
-After `make install`, run `grok-build doctor --ci`.  
+After `make install` (global or `~/.local` fallback — same command), run `grok-build doctor --ci`.  
 FreeBSD ports WIP: `make doctor-ci` / `do-test` with `GROK_REUSE_TARGET=yes`.
 
 ---

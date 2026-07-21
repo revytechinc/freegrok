@@ -79,21 +79,22 @@ pkg install rust protobuf ripgrep         # once
 cd /path/to/grok-build
 make build                                # always runs cargo (incremental)
 make doctor                               # offline self-check (doctor --ci)
-doas make install                         # → /usr/local/bin/grok-build
-# or no root:
-make install-user                         # → ~/.local/bin/grok-build
+make install                              # → /usr/local if writable, else ~/.local
 grok-build --version && grok-build doctor --ci
 ```
 
+**One install interface:** `make install` always installs **`grok-build`** with the same layout. It prefers `PREFIX` (default `/usr/local`). If that tree is not writable, it installs to `$HOME/.local` and prints a note — no separate target.
+
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `PREFIX` | `/usr/local` | Install root |
-| `BINNAME` | `grok-build` | Installed command name (avoids clashing with Linux brand `grok`) |
-| `DESTDIR` | empty | Staging root for packaging |
+| `PREFIX` | `/usr/local` | Preferred install root |
+| `BINNAME` | `grok-build` | Command name (avoids clashing with Linux brand `grok`) |
+| `DESTDIR` | empty | Staging root (no userspace fallback when set) |
 | `PROTOC` | `protoc` | Protobuf compiler |
 
 ```sh
-doas make uninstall                       # remove bin + completions + docs
+make uninstall                            # from PREFIX
+make uninstall PREFIX=$$HOME/.local       # if install fell back
 ```
 
 ### Cargo (all platforms)

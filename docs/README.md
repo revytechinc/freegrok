@@ -16,9 +16,8 @@ User-facing guides live with the pager package and are what ship under `~/.grok/
 
 ```sh
 pkg install rust protobuf ripgrep
-make build
-make doctor                  # doctor --ci
-doas make install            # /usr/local/bin/grok-build
+make build && make doctor
+make install                 # /usr/local if writable, else ~/.local — same BINNAME
 ```
 
 See root [`Makefile`](../Makefile).
