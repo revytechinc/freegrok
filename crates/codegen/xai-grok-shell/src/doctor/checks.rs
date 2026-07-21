@@ -4,10 +4,14 @@ use super::{CheckResult, Severity, Status, timed};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// FreeBSD major floor: 14, 15, and 16 (CURRENT/dev).
+pub const MIN_FREEBSD_MAJOR: u32 = 14;
+
 pub async fn run_default_tier(quick: bool) -> Vec<CheckResult> {
     let mut out = Vec::new();
 
     out.push(timed(check_binary_identity));
+    out.push(timed(check_freebsd_version));
     out.push(timed(check_version_info));
     out.push(timed(check_rg));
     out.push(timed(check_grok_home));
@@ -79,6 +83,71 @@ pub fn os_release() -> String {
         }
     }
     "unknown".into()
+}
+
+/// Parse FreeBSD major version from strings like `15.1-STABLE`, `14.3-RELEASE`, `14.0-CURRENT`.
+/// Returns `None` if the major cannot be parsed.
+pub fn parse_freebsd_major(release: &str) -> Option<u32> {
+    let first = release.split(['-', '_', ' ']).next().unwrap_or(release);
+    let major = first.split('.').next()?;
+    major.parse().ok()
+}
+
+fn check_freebsd_version() -> CheckResult {
+    #[cfg(target_os = "freebsd")]
+    {
+        let release = os_release();
+        match parse_freebsd_major(&release) {
+            Some(major) if major >= MIN_FREEBSD_MAJOR => CheckResult {
+                id: "platform.freebsd_version".into(),
+                tier: "default".into(),
+                severity: Severity::Critical,
+                status: Status::Pass,
+                summary: format!("FreeBSD {release}"),
+                detail: Some("Targets FreeBSD 14, 15, and 16 (dev).".into()),
+                fix: None,
+                requires: vec![],
+                duration_ms: 0,
+            },
+            Some(major) => CheckResult {
+                id: "platform.freebsd_version".into(),
+                tier: "default".into(),
+                severity: Severity::Critical,
+                status: Status::Fail,
+                summary: format!("FreeBSD {major} ({release})"),
+                detail: Some("Needs FreeBSD 14, 15, or 16.".into()),
+                fix: None,
+                requires: vec![],
+                duration_ms: 0,
+            },
+            None => CheckResult {
+                id: "platform.freebsd_version".into(),
+                tier: "default".into(),
+                severity: Severity::Critical,
+                status: Status::Warn,
+                summary: format!("FreeBSD version unparsed ({release})"),
+                detail: None,
+                fix: None,
+                requires: vec![],
+                duration_ms: 0,
+            },
+        }
+    }
+
+    #[cfg(not(target_os = "freebsd"))]
+    {
+        CheckResult {
+            id: "platform.freebsd_version".into(),
+            tier: "default".into(),
+            severity: Severity::Info,
+            status: Status::Skip,
+            summary: "FreeBSD version check N/A".into(),
+            detail: None,
+            fix: None,
+            requires: vec![],
+            duration_ms: 0,
+        }
+    }
 }
 
 fn check_binary_identity() -> CheckResult {

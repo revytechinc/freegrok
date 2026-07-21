@@ -20,6 +20,10 @@
 
 **Target product platform** for this workstream is **FreeBSD**. Authoring hosts only keep the tree buildable and implement `cfg(target_os = "freebsd")` safely.
 
+### FreeBSD version baseline
+
+**14, 15, and 16** (16 = CURRENT/dev). Ports: `OSVERSION >= 1400000`.
+
 ---
 
 ## Context

@@ -373,4 +373,13 @@ mod tests {
         assert!(!report.checks.is_empty());
         assert!(!report.binary.brand.is_empty());
     }
+
+    #[test]
+    fn parse_freebsd_major_stable_and_release() {
+        assert_eq!(checks::parse_freebsd_major("15.1-STABLE"), Some(15));
+        assert_eq!(checks::parse_freebsd_major("14.3-RELEASE"), Some(14));
+        assert_eq!(checks::parse_freebsd_major("16.0-CURRENT"), Some(16));
+        assert_eq!(checks::parse_freebsd_major("bogus"), None);
+        assert_eq!(checks::MIN_FREEBSD_MAJOR, 14);
+    }
 }
