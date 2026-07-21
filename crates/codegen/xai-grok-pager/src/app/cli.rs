@@ -15,6 +15,41 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Run product self-diagnostics (platform readiness)
+    ///
+    /// Default: unprivileged, offline — no network, model calls, or sudo.
+    /// FreeBSD: jail sandbox absence is a warning (unprivileged jail create is
+    /// impossible); missing system `rg` is critical.
+    Doctor {
+        /// Emit machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+        /// Critical subset only (faster).
+        #[arg(long)]
+        quick: bool,
+        /// Treat warnings as failures (exit 1 or 2 with --strict).
+        #[arg(long)]
+        strict: bool,
+        /// Build/CI gate: offline + quick; fail only on critical; 15s wall budget.
+        /// Use this in ports `do-test` and FreeBSD regression (does not stall).
+        #[arg(long)]
+        ci: bool,
+        /// Allow network probes (partial in early doctor).
+        #[arg(long)]
+        online: bool,
+        /// Use credentials / models probes (partial in early doctor).
+        #[arg(long)]
+        auth: bool,
+        /// Run MCP connectivity checks (use `grok mcp doctor` for full report).
+        #[arg(long)]
+        mcp: bool,
+        /// Attempt sandbox-deep checks (FreeBSD helper only; never prompts sudo).
+        #[arg(long)]
+        sandbox_deep: bool,
+        /// One live inference turn (not implemented yet).
+        #[arg(long)]
+        live: bool,
+    },
     /// Manage running leader processes
     Leader(LeaderMgmtArgs),
     /// Sign out and clear cached credentials
@@ -125,6 +160,8 @@ See ~/.grok/README.md for more information.
     },
     /// Manage git worktrees
     Worktree(crate::worktree_cmd::WorktreeArgs),
+    /// FreeBSD jail catalog / dry-run setup (agent isolation)
+    Jail(crate::jail_cmd::JailArgs),
     /// Expose this workspace to the Computer Hub (via the leader).
     ///
     /// Disabled by default and enabled server-side per account; set

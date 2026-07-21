@@ -71,6 +71,8 @@ impl SandboxEvent {
             "linux/landlock"
         } else if cfg!(target_os = "macos") {
             "macos/seatbelt"
+        } else if cfg!(target_os = "freebsd") {
+            "freebsd/jail"
         } else {
             "unknown"
         };
@@ -118,6 +120,8 @@ impl SandboxEvent {
             "linux/landlock"
         } else if cfg!(target_os = "macos") {
             "macos/seatbelt"
+        } else if cfg!(target_os = "freebsd") {
+            "freebsd/jail"
         } else {
             "unknown"
         };

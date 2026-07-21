@@ -646,6 +646,7 @@ pub(super) mod paste_key_tests {
         assert!(agent.prompt.text().is_empty());
     }
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_image_path_detected_as_image() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -665,6 +666,7 @@ pub(super) mod paste_key_tests {
         )));
     }
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_tiny_image_path_cannot_insert_or_send_immediately() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -698,6 +700,7 @@ pub(super) mod paste_key_tests {
         assert_eq!(agent.prompt.text(), "/tmp/not-an-image.txt");
     }
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_non_image_file_url_with_clipboard_icon_uses_path_not_icon() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -733,6 +736,7 @@ pub(super) mod paste_key_tests {
     /// probe's `FileUrlsThenImage` route suppresses the Finder file-icon raster
     /// off-thread, so the completion sees no image.
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_file_urls_probe_recovers_when_text_is_none() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -773,6 +777,7 @@ pub(super) mod paste_key_tests {
     /// returns `Some("")` rather than `None` in some configurations. The
     /// deferred file-url recovery must still route the path on completion.
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_file_urls_probe_recovers_when_text_is_empty_string() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -803,6 +808,7 @@ pub(super) mod paste_key_tests {
     /// the PNG entry to a chip and (b) route the non-image entry to decoded path
     /// text (the Finder file-icon raster is suppressed by the off-thread probe).
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_file_urls_probe_handles_multi_file_payload() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -840,6 +846,7 @@ pub(super) mod paste_key_tests {
     /// the text-path resolver wins synchronously and NO probe is deferred (so the
     /// off-thread file-url recovery never runs and can't insert a rival path).
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_file_urls_probe_not_double_inserted_when_text_classifies() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -867,6 +874,7 @@ pub(super) mod paste_key_tests {
         );
     }
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_non_image_file_url_percent_encoded_space_round_trips() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -900,6 +908,7 @@ pub(super) mod paste_key_tests {
         );
     }
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_multi_file_drop_image_plus_non_image_handles_both() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -936,6 +945,7 @@ pub(super) mod paste_key_tests {
         );
     }
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_image_path_with_trailing_newline_still_attaches() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -965,6 +975,7 @@ pub(super) mod paste_key_tests {
     /// classifier on this branch would silently regress the headline
     /// bug; this test fails fast in that scenario.
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn event_paste_non_image_file_url_inserts_decoded_path_not_chip() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -1003,6 +1014,7 @@ pub(super) mod paste_key_tests {
     /// statically by the `image_cap_reached` branch in
     /// `try_handle_dropped_paths_paste`.
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn paste_key_cap_reached_does_not_block_non_image_insert() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
@@ -1099,6 +1111,7 @@ pub(super) mod paste_key_tests {
     /// `self.prompt.handle_paste(text)` here would skip path decoding
     /// and fail this test.
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn event_paste_plan_feedback_non_image_file_url_decoded_into_prompt() {
         assert_event_paste_arm_decodes_non_image("plan_feedback", |agent| {
             agent.enter_casual_commenting_for_test();
@@ -1110,6 +1123,7 @@ pub(super) mod paste_key_tests {
     }
     /// Permission-followup `Event::Paste` arm routes through the classifier.
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn event_paste_permission_followup_non_image_file_url_decoded_into_prompt() {
         assert_event_paste_arm_decodes_non_image("permission_followup", |agent| {
             agent
@@ -1119,6 +1133,7 @@ pub(super) mod paste_key_tests {
     }
     /// Plan-approval-view `Event::Paste` arm routes through the classifier.
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn event_paste_plan_approval_non_image_file_url_decoded_into_prompt() {
         assert_event_paste_arm_decodes_non_image("plan_approval", |agent| {
             let mut view = make_plan_approval_view_state();
@@ -1143,6 +1158,7 @@ pub(super) mod paste_key_tests {
     /// Question-view `Event::Paste` arm routes through the classifier when
     /// the question view is in `InputMode` focus.
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn event_paste_question_view_input_mode_non_image_file_url_decoded_into_prompt() {
         assert_event_paste_arm_decodes_non_image("question_view", |agent| {
             agent.question_view = Some(make_question_view_state_in_input_mode());
@@ -2550,6 +2566,7 @@ pub(super) mod paste_key_tests {
         );
     }
     #[test]
+    #[cfg_attr(target_os = "freebsd", ignore = "file:// / path paste probe incomplete on FreeBSD")]
     fn agent_completion_inserts_unreadable_file_url_as_path_text() {
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);

@@ -705,7 +705,12 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let err = open_stdio_targets(&link).unwrap_err();
-        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
+        // Linux: ELOOP. FreeBSD open(O_NOFOLLOW) on a symlink: EMLINK.
+        let code = err.raw_os_error();
+        assert!(
+            code == Some(libc::ELOOP) || code == Some(libc::EMLINK),
+            "expected ELOOP or EMLINK for symlink, got {code:?}"
+        );
     }
 
     #[cfg(unix)]
@@ -717,7 +722,12 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let err = PidFile::acquire(&link).unwrap_err();
-        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
+        // Linux: ELOOP. FreeBSD open(O_NOFOLLOW) on a symlink: EMLINK.
+        let code = err.raw_os_error();
+        assert!(
+            code == Some(libc::ELOOP) || code == Some(libc::EMLINK),
+            "expected ELOOP or EMLINK for symlink, got {code:?}"
+        );
         // The truncate-through-symlink primitive is blocked: O_CREAT did not
         // follow the link to create (and truncate) its target.
         assert!(!target.exists());

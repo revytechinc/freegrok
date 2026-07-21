@@ -242,3 +242,36 @@ Sandbox events are logged to `~/.grok/sandbox-events.jsonl` for debugging. Event
 | Recovery    | Must trust the agent       | Kernel enforces boundaries      |
 
 The sandbox enforces limits at the OS level -- through Landlock or a mount namespace on Linux, and Seatbelt on macOS -- not a separate VM.
+
+---
+
+## FreeBSD
+
+FreeBSD does **not** use Landlock or Seatbelt. Isolation is planned via a **jail-backed helper** (bubblewrap analog). Until that helper is installed, Grok **degrades safely**: sandbox profiles log a warning and the agent continues without OS enforcement.
+
+| Item | Detail |
+|------|--------|
+| Backend | FreeBSD jail (ephemeral re-exec via `grok-jail-helper` when present) |
+| Default network | **None** for agent isolation (console / `jexec`). Same idea as Linux bwrap FS isolation — no network namespace required |
+| Privilege | Creating jails needs admin once. Unprivileged `jail_set` fails with EPERM |
+| Product scope | Optional isolation for the **TUI coding agent** — not a FreeBSD jail control panel |
+
+### Check and dry-run setup
+
+```bash
+# Offline status (helper present? already jailed?)
+grok jail status
+
+# Dry-run: helper-only plan + short privilege explanation (no sudo yet)
+grok jail setup
+
+# Optional online catalog of FreeBSD base.txz versions (userland must be ≤ host)
+grok jail catalog
+
+# Advanced persistent root plan only (still local-only; not the default path)
+grok jail setup --full
+```
+
+On FreeBSD packages that install as `grok-build`, use that name instead of `grok`.
+
+Decline setup anytime — Grok keeps working. See also [Diagnostics (`grok doctor`)](25-doctor.md) and the FreeBSD engineering notes in the source tree (`docs/freebsd-port-and-jail-sandbox.md`).

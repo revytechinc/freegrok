@@ -40,7 +40,30 @@ Verify the installation:
 grok --version
 ```
 
-Update to the latest version at any time:
+Optional product self-check (offline; no admin required):
+
+```bash
+grok doctor
+# Build/CI gate (fail only on critical issues):
+grok doctor --ci
+```
+
+### FreeBSD
+
+Official install scripts ship Linux/macOS binaries. On FreeBSD, install a **native** binary as **`grok-build`** (coexists with any Linux brand `grok` under the linuxulator).
+
+**From source (no ports tree):**
+
+```bash
+pkg install rust protobuf ripgrep
+git clone <your-fork-or-tree> && cd grok-build
+make build && make doctor
+make install                # /usr/local if writable, else ~/.local — same grok-build
+```
+
+See the repo root `Makefile`. One install command; userspace fallback keeps the same binary name. Runtime needs system **ripgrep**. OS isolation is optional; see [Sandbox Mode](18-sandbox.md#freebsd) and [Diagnostics](25-doctor.md). Supported majors: **14, 15, and 16** (16 = CURRENT/dev).
+
+Update to the latest version at any time (where a release channel exists):
 
 ```bash
 grok update

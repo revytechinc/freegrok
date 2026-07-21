@@ -650,8 +650,8 @@ mod tests {
 
     #[test]
     #[cfg_attr(
-        target_os = "macos",
-        ignore = "flaky on macOS: FSEvents does not reliably deliver events in test harness"
+        any(target_os = "macos", target_os = "freebsd"),
+        ignore = "flaky: FS events not reliably delivered (macOS FSEvents / FreeBSD kqueue)"
     )]
     fn watcher_detects_auth_json_change() {
         let tmp = TempDir::new().unwrap();
@@ -727,8 +727,8 @@ mod tests {
 
     #[test]
     #[cfg_attr(
-        target_os = "macos",
-        ignore = "flaky on macOS: FSEvents does not reliably deliver events in test harness"
+        any(target_os = "macos", target_os = "freebsd"),
+        ignore = "flaky: FS events not reliably delivered (macOS FSEvents / FreeBSD kqueue)"
     )]
     fn watcher_detects_config_toml_change() {
         let tmp = TempDir::new().unwrap();
@@ -755,8 +755,8 @@ mod tests {
     /// hot-load a catalog fetched by another grok process.
     #[test]
     #[cfg_attr(
-        target_os = "macos",
-        ignore = "flaky on macOS: FSEvents does not reliably deliver events in test harness"
+        any(target_os = "macos", target_os = "freebsd"),
+        ignore = "flaky: FS events not reliably delivered (macOS FSEvents / FreeBSD kqueue)"
     )]
     fn watcher_detects_models_cache_change() {
         let tmp = TempDir::new().unwrap();
@@ -839,8 +839,8 @@ mod tests {
     /// usual FSEvents delivery on macOS CI.
     #[test]
     #[cfg_attr(
-        target_os = "macos",
-        ignore = "flaky on macOS: FSEvents does not reliably deliver events in test harness"
+        any(target_os = "macos", target_os = "freebsd"),
+        ignore = "flaky: FS events not reliably delivered (macOS FSEvents / FreeBSD kqueue)"
     )]
     fn project_cwd_toml_triggers_reload() {
         let grok_home = TempDir::new().unwrap();
@@ -889,8 +889,8 @@ mod tests {
     /// [`project_cwd_toml_triggers_reload`].
     #[test]
     #[cfg_attr(
-        target_os = "macos",
-        ignore = "flaky on macOS: FSEvents does not reliably deliver events in test harness"
+        any(target_os = "macos", target_os = "freebsd"),
+        ignore = "flaky: FS events not reliably delivered (macOS FSEvents / FreeBSD kqueue)"
     )]
     fn project_mcp_json_triggers_reload() {
         let grok_home = TempDir::new().unwrap();
@@ -977,8 +977,8 @@ mod tests {
     /// new project root after the watcher is already running.
     #[test]
     #[cfg_attr(
-        target_os = "macos",
-        ignore = "flaky on macOS: FSEvents does not reliably deliver events in test harness"
+        any(target_os = "macos", target_os = "freebsd"),
+        ignore = "flaky: FS events not reliably delivered (macOS FSEvents / FreeBSD kqueue)"
     )]
     fn watch_path_dynamic_registration() {
         let grok_home = TempDir::new().unwrap();

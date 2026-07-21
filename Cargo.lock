@@ -6495,7 +6495,6 @@ dependencies = [
 [[package]]
 name = "nucleo"
 version = "0.5.0"
-source = "git+https://github.com/helix-editor/nucleo.git?rev=5b74652#5b74652e482f7c07d827f18c6d21e7540c242c69"
 dependencies = [
  "nucleo-matcher",
  "parking_lot",
@@ -6505,7 +6504,6 @@ dependencies = [
 [[package]]
 name = "nucleo-matcher"
 version = "0.3.1"
-source = "git+https://github.com/helix-editor/nucleo.git?rev=5b74652#5b74652e482f7c07d827f18c6d21e7540c242c69"
 dependencies = [
  "memchr",
  "unicode-segmentation",
@@ -9801,8 +9799,6 @@ dependencies = [
 [[package]]
 name = "sqlite-vec"
 version = "0.1.7-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2388d9b97b32baa48a059df2f15a9bb49217fa1f9fb076e98c89e8fc02c8f2c4"
 dependencies = [
  "cc",
 ]

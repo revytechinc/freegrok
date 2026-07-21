@@ -4,20 +4,20 @@
 //! Linux: Landlock cannot deny a subpath of an allowed tree; read-deny is
 //! enforced via bwrap bind-over (see [`crate::bwrap_reexec_command`]).
 
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 use nono::CapabilitySet;
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 use std::path::{Path, PathBuf};
 
 // Glob deny entries (detection, macOS regex translation, Linux launch-time
 // expansion) live in a submodule; re-exported so call sites use `deny::…`.
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 mod glob;
 #[cfg(all(feature = "enforce", target_os = "linux"))]
 pub(crate) use glob::{
     DENY_GLOB_MAX_DEPTH, DENY_GLOB_MAX_ENTRIES, DENY_GLOB_MAX_MATCHES, expand_deny_globs,
 };
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 pub(crate) use glob::{apply_deny_globs_to_capability_set, partition_deny_entries};
 
 /// Escape a path for use inside a Seatbelt `(literal "...")` / `(subpath "...")`
@@ -117,7 +117,7 @@ fn emit_seatbelt_deny(caps: &mut CapabilitySet, filter: &str) -> anyhow::Result<
 /// On macOS, adds Seatbelt read-deny + write-deny (incl. specific write
 /// sub-actions) rules. On Linux, this is a no-op — callers must use bwrap
 /// bind-over for read-deny.
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn apply_deny_paths_to_capability_set(
     caps: &mut CapabilitySet,
     deny_paths: &[PathBuf],
@@ -182,7 +182,7 @@ pub(crate) fn apply_deny_paths_to_capability_set(
 /// Resolve deny path strings from a profile against the workspace.
 ///
 /// Relative paths are joined with `workspace`. Absolute paths are used as-is.
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn resolve_deny_paths(workspace: &Path, deny: &[PathBuf]) -> Vec<PathBuf> {
     deny.iter()
         .map(|p| {
@@ -197,7 +197,7 @@ pub(crate) fn resolve_deny_paths(workspace: &Path, deny: &[PathBuf]) -> Vec<Path
 
 /// Resolve, sort, and dedup a profile's deny list into the canonical set of
 /// paths to enforce. Shared by the Seatbelt (profiles.rs) and bwrap (lib.rs) sites.
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn effective_deny_paths(workspace: &Path, deny: &[PathBuf]) -> Vec<PathBuf> {
     let mut paths = resolve_deny_paths(workspace, deny);
     paths.sort();
@@ -226,7 +226,7 @@ pub(crate) fn exact_deny_path_strings(workspace: &Path, exact: &[PathBuf]) -> Ve
 /// Limitation: a non-existent deny path is treated as a single file (macOS emits
 /// `(literal …)`); if it is later created as a directory its children are not
 /// covered on macOS. Name concrete existing paths to deny a whole directory tree.
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn deny_path_is_dir(canonical: &Path) -> bool {
     canonical.is_dir()
 }
@@ -235,11 +235,11 @@ pub(crate) fn deny_path_is_dir(canonical: &Path) -> bool {
 mod tests {
     // All tests here exercise enforce+unix paths; without the gate `super::*`
     // is unused on `--no-default-features`.
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     use super::*;
 
     #[test]
-    #[cfg(all(feature = "enforce", unix))]
+    #[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
     fn resolve_deny_paths_relative() {
         let ws = PathBuf::from("/tmp/project");
         let deny = vec![PathBuf::from(".env"), PathBuf::from("/etc/shadow")];

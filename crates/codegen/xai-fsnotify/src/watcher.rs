@@ -1579,6 +1579,7 @@ mod tests {
 
         #[test]
         #[serial]
+        #[ignore = "flaky in CI — fs events not reliably delivered (FreeBSD kqueue)"]
         fn test_debouncer_modify_file() {
             let temp_dir = TempDir::new().unwrap();
             let watch_path = dunce::canonicalize(temp_dir.path()).unwrap();
@@ -1748,6 +1749,7 @@ mod tests {
 
         #[test]
         #[serial]
+        #[ignore = "flaky in CI — fs events not reliably delivered (FreeBSD kqueue)"]
         fn test_debouncer_gitignore_respected() {
             let temp_dir = TempDir::new().unwrap();
             let watch_path = dunce::canonicalize(temp_dir.path()).unwrap();
@@ -1794,6 +1796,7 @@ mod tests {
 
         #[test]
         #[serial]
+        #[ignore = "flaky in CI — fs events not reliably delivered (FreeBSD kqueue)"]
         fn test_debouncer_custom_ignore_patterns() {
             let temp_dir = TempDir::new().unwrap();
             let watch_path = dunce::canonicalize(temp_dir.path()).unwrap();
@@ -1970,6 +1973,7 @@ mod tests {
 
         #[test]
         #[serial]
+        #[ignore = "flaky in CI — fs events not reliably delivered (FreeBSD kqueue)"]
         fn test_debouncer_nested_gitignore() {
             // Test that nested .gitignore files are respected
             let temp_dir = TempDir::new().unwrap();

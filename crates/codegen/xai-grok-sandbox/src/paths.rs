@@ -23,7 +23,7 @@ pub(crate) fn grok_home() -> PathBuf {
 ///
 /// These are individual files (use `allow_file`, not `allow_path`).
 /// `/dev/pts` is a directory (PTY slaves on Linux) so it uses `allow_path`.
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 pub(crate) const DEVICE_FILES: &[&str] = &[
     "/dev/null",    // output sink — used by virtually every CLI tool
     "/dev/zero",    // zero source — used by memory allocators
@@ -35,7 +35,7 @@ pub(crate) const DEVICE_FILES: &[&str] = &[
 ];
 
 /// Device directories that need write access.
-#[cfg(all(feature = "enforce", unix))]
+#[cfg(all(feature = "enforce", any(target_os = "linux", target_os = "macos")))]
 pub(crate) const DEVICE_DIRS: &[&str] = &[
     "/dev/pts", // PTY slaves (Linux)
 ];

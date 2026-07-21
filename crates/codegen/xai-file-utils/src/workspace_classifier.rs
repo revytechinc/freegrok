@@ -141,6 +141,13 @@ fn is_platform_home_excluded(cwd: &Path, home: &Path) -> bool {
     .contains(&name.as_str())
 }
 
+// FreeBSD and other non-macOS/Linux/Windows Unix: no special home XDG-like
+// exclusions beyond known_os_dirs / EXCLUDED_DIR_NAMES.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn is_platform_home_excluded(_cwd: &Path, _home: &Path) -> bool {
+    false
+}
+
 #[cfg(target_os = "windows")]
 fn is_platform_home_excluded(_cwd: &Path, _home: &Path) -> bool {
     false

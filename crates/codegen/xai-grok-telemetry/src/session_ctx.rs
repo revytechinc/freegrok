@@ -214,29 +214,42 @@ pub fn emit_event_with_origin<T: Serialize + Send + 'static>(
         })
         .ok();
 
-    tokio::spawn(async move {
-        let user_ctx = UserContext::collect();
-        let request_id = format!("{}-{}", event_name, uuid::Uuid::new_v4());
+    // Prefer the current runtime (normal app path). Without a reactor (unit
+    // tests, early startup), spawn would panic — drop the fire-and-forget
+    // emit rather than aborting the process.
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(async move {
+                let user_ctx = UserContext::collect();
+                let request_id = format!("{}-{}", event_name, uuid::Uuid::new_v4());
 
-        let mut metadata = match serde_json::to_value(data) {
-            Ok(serde_json::Value::Object(map)) => map,
-            Ok(other) => {
-                let mut m = Metadata::new();
-                m.insert("value".into(), other);
-                m
-            }
-            Err(_) => Metadata::new(),
-        };
+                let mut metadata = match serde_json::to_value(data) {
+                    Ok(serde_json::Value::Object(map)) => map,
+                    Ok(other) => {
+                        let mut m = Metadata::new();
+                        m.insert("value".into(), other);
+                        m
+                    }
+                    Err(_) => Metadata::new(),
+                };
 
-        if let Some((session_id, turn_number)) = ctx_snapshot {
-            metadata.insert("session_id".into(), json!(session_id));
-            if let Some(turn) = turn_number {
-                metadata.insert("turn_number".into(), json!(turn));
-            }
+                if let Some((session_id, turn_number)) = ctx_snapshot {
+                    metadata.insert("session_id".into(), json!(session_id));
+                    if let Some(turn) = turn_number {
+                        metadata.insert("turn_number".into(), json!(turn));
+                    }
+                }
+
+                client::track(&event_name, &request_id, &user_ctx, metadata).await;
+            });
         }
-
-        client::track(&event_name, &request_id, &user_ctx, metadata).await;
-    });
+        Err(_) => {
+            tracing::trace!(
+                event = %event_name,
+                "skip mixpanel emit: no Tokio runtime"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
