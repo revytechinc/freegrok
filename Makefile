@@ -1,7 +1,11 @@
 # Grok Build — source install (no ports required)
 #
+# Defaults:
+#   make            → build release binary (same as make build / make release)
+#   make install    → build first, require binary present, then install
+#
 # One install interface:
-#   make build && make doctor && make install
+#   make && make doctor && make install
 #
 # install tries PREFIX (default /usr/local). If that tree is not writable,
 # the *same* install runs under $$HOME/.local — same BINNAME, same paths
@@ -31,23 +35,25 @@ ZSHCOMPDIR = $(IPREFIX)/share/zsh/site-functions
 FISHCOMPDIR = $(IPREFIX)/share/fish/vendor_completions.d
 
 .PHONY: all build release install uninstall doctor check clean help preflight \
-	_install_all _install_bin _install_completions _install_docs
+	require-build ensure-build _install_all _install_bin _install_completions _install_docs
 
-all: release
+# Default goal: bare "make" builds the release binary.
+all: build
 
 help:
 	@echo "Grok Build source Makefile (TUI agent)"
 	@echo ""
+	@echo "  make            release binary (default; same as make build)"
 	@echo "  make build      release binary (cargo, incremental)"
-	@echo "  make doctor     offline gate: doctor --ci"
-	@echo "  make install    install $(BINNAME) (PREFIX=$(PREFIX); falls back to ~/\.local if not writable)"
+	@echo "  make doctor     offline gate: doctor --ci (builds if binary missing)"
+	@echo "  make install    install $(BINNAME) (builds if needed; PREFIX=$(PREFIX); falls back to ~/\.local)"
 	@echo "  make uninstall  remove from PREFIX (or set PREFIX=$$HOME/.local)"
 	@echo "  make check      cargo check"
 	@echo "  make clean      cargo clean"
 	@echo ""
 	@echo "PREFIX=$(PREFIX)  BINNAME=$(BINNAME)  PROTOC=$(PROTOC)"
 	@echo "Deps: pkg install rust protobuf ripgrep"
-	@echo "Example: make install          # prefers /usr/local, else userspace"
+	@echo "Example: make && make install  # build, then install"
 
 preflight:
 	@if ! command -v $(CARGO) >/dev/null 2>&1; then \
@@ -61,17 +67,37 @@ preflight:
 	fi
 
 build release: preflight
+	@echo "==> build $(CARGO_BIN_PKG) --release"
 	env PROTOC="$(PROTOC)" $(CARGO) build -p $(CARGO_BIN_PKG) --release
-	@test -x $(RELEASE_BIN) || (echo "error: missing $(RELEASE_BIN)"; exit 1)
+	@test -x $(RELEASE_BIN) || (echo "error: build finished but missing $(RELEASE_BIN)"; exit 1)
+	@echo "==> build ok: $(RELEASE_BIN)"
+
+# Fail if release binary is missing (e.g. install after clean without make).
+require-build:
+	@if [ ! -x $(RELEASE_BIN) ]; then \
+		echo "error: $(RELEASE_BIN) missing — run: make  (or make build)"; \
+		exit 1; \
+	fi
+
+# Build only when the release binary is absent (avoids re-cargo under doas/root).
+ensure-build:
+	@if [ ! -x $(RELEASE_BIN) ]; then \
+		echo "==> $(RELEASE_BIN) missing; building first"; \
+		$(MAKE) build; \
+	else \
+		echo "==> using existing $(RELEASE_BIN)"; \
+	fi
 
 check: preflight
 	env PROTOC="$(PROTOC)" $(CARGO) check -p $(CARGO_BIN_PKG)
 
-doctor: build
+doctor: ensure-build require-build
 	./$(RELEASE_BIN) doctor --ci
 
-# Single interface: try PREFIX; if unwritable (and DESTDIR empty), same install under $$HOME/.local
-install: build
+# Single interface: ensure binary exists (build if needed), then install.
+# Prefer: make && doas/sudo make install  so cargo never runs as root.
+# PREFIX default /usr/local; if unwritable (and DESTDIR empty) → $$HOME/.local
+install: ensure-build require-build
 	@dest="$(DESTDIR)"; \
 	pref="$(PREFIX)"; \
 	if [ -n "$$dest" ]; then \
@@ -85,22 +111,22 @@ install: build
 	else \
 		userp="$$HOME/.local"; \
 		echo "==> $$pref not writable; installing to $$userp (same layout, same $(BINNAME))"; \
-		echo "    (for system-wide: doas/sudo make install PREFIX=$$pref)"; \
+		echo "    (for system-wide: make && doas/sudo make install PREFIX=$$pref)"; \
 		$(MAKE) _install_all IPREFIX="$$userp" DESTDIR="" BINNAME="$(BINNAME)"; \
 	fi
 
-_install_all: _install_bin _install_completions _install_docs
+_install_all: require-build _install_bin _install_completions _install_docs
 	@echo ""
 	@echo "Installed: $(DESTDIR)$(BINDIR)/$(BINNAME)"
 	@echo "Check:     $(BINNAME) doctor --ci"
 	@echo "Optional:  $(BINNAME) jail status"
 	@echo "PATH:      ensure $(BINDIR) is on PATH"
 
-_install_bin:
+_install_bin: require-build
 	mkdir -p "$(DESTDIR)$(BINDIR)"
 	install -m 755 "$(RELEASE_BIN)" "$(DESTDIR)$(BINDIR)/$(BINNAME)"
 
-_install_completions:
+_install_completions: require-build
 	mkdir -p "$(DESTDIR)$(BASHCOMPDIR)" "$(DESTDIR)$(ZSHCOMPDIR)" "$(DESTDIR)$(FISHCOMPDIR)"
 	./$(RELEASE_BIN) completions bash | sed "s/grok/$(BINNAME)/g" \
 		> "$(DESTDIR)$(BASHCOMPDIR)/$(BINNAME)"
