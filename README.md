@@ -77,11 +77,12 @@ From a clone on FreeBSD 14, 15, or 16 (dev):
 ```sh
 pkg install rust protobuf ripgrep         # once
 cd /path/to/grok-build
-make build                                # → target/release/xai-grok-pager
+make build                                # always runs cargo (incremental)
 make doctor                               # offline self-check (doctor --ci)
 doas make install                         # → /usr/local/bin/grok-build
-grok-build --version
-grok-build doctor --ci
+# or no root:
+make install-user                         # → ~/.local/bin/grok-build
+grok-build --version && grok-build doctor --ci
 ```
 
 | Variable | Default | Meaning |
@@ -93,7 +94,6 @@ grok-build doctor --ci
 
 ```sh
 doas make uninstall                       # remove bin + completions + docs
-make install PREFIX=$$HOME/.local         # user-local (no root)
 ```
 
 ### Cargo (all platforms)
