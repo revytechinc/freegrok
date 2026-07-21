@@ -580,6 +580,9 @@ fn list_models_from_configs(
                                     .or_else(|| item.as_str())
                                     .map(str::to_string);
                                 let Some(id) = id else { continue };
+                                if !looks_like_model_id(&id) {
+                                    continue;
+                                }
                                 out.push(DiscoveredModel {
                                     id,
                                     display_name: item
@@ -738,6 +741,8 @@ pub fn recent_models_for_provider(provider: &str) -> &'static [&'static str] {
 }
 
 /// Write AGY CLI discovery results into cache for offline re-import.
+///
+/// Only entries that pass [`looks_like_model_id`] are stored.
 pub fn cache_discovered_models(
     gemini_home: &Path,
     models: &[(String, Option<String>)],
@@ -747,6 +752,7 @@ pub fn cache_discovered_models(
     let path = dir.join("discovered_models.json");
     let arr: Vec<serde_json::Value> = models
         .iter()
+        .filter(|(id, _)| looks_like_model_id(id))
         .map(|(id, display)| {
             serde_json::json!({
                 "id": id,
@@ -948,11 +954,25 @@ fn looks_like_model_id(s: &str) -> bool {
     if s.len() < 5 || s.len() > 96 {
         return false;
     }
-    // Reject paths, URLs, and shell noise from chat history scrapes.
-    if s.starts_with('/') || s.starts_with('.') || s.contains("://") || s.contains("..") {
+    // Reject paths, protocol-relative URLs, and shell noise from history/cache.
+    if s.starts_with('/')
+        || s.starts_with('.')
+        || s.starts_with("\\")
+        || s.contains("://")
+        || s.contains("..")
+        || s.starts_with("//")
+        || s.contains("\\")
+    {
         return false;
     }
     if s.contains(' ') {
+        return false;
+    }
+    // First char must be alphanumeric (rejects `//host`, `../x`).
+    let Some(first) = s.chars().next() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() {
         return false;
     }
     // Must look like a product model slug, not a random path segment.
@@ -972,7 +992,6 @@ fn looks_like_model_id(s: &str) -> bool {
         || lower.starts_with("qwen")
         || lower.starts_with("minimax")
         || lower.starts_with("chatgpt")
-        || lower.starts_with("gpt-oss")
         || lower.starts_with("openai/")
         || lower.starts_with("anthropic/")
         || lower.starts_with("google/")
@@ -1263,16 +1282,30 @@ GPT-OSS 120B (Medium)
 
     #[test]
     fn history_scrape_rejects_urls_and_paths() {
+        // Synthetic noise only — no real usernames, hosts, or home paths.
         let junk = r#"
-            check //wallhaven.cc/user/foo and /home/mlapointe/git/wf-shell
-            and Be/Haiku plus logout/poweroff then gemini-3.5-flash-medium
+            check //example.invalid/user/demo and /home/user/git/sample-project
+            and Theme/Name plus logout/poweroff then gemini-3.5-flash-medium
             and claude-sonnet-4.6-thinking and gpt-oss-120b-medium
         "#;
         let ids = scrape_model_ids_from_text(junk);
-        assert!(ids.iter().all(|i| !i.contains("wallhaven")));
+        assert!(ids.iter().all(|i| !i.contains("example.invalid")));
         assert!(ids.iter().all(|i| !i.starts_with('/')));
+        assert!(ids.iter().all(|i| !i.starts_with("..")));
+        assert!(!ids.iter().any(|i| i == "accross" || i == "possible"));
         assert!(ids.iter().any(|i| i.contains("gemini-3.5")));
         assert!(ids.iter().any(|i| i.contains("claude")));
         assert!(ids.iter().any(|i| i.contains("gpt-oss")));
+    }
+
+    #[test]
+    fn looks_like_rejects_protocol_relative_and_dotdot() {
+        assert!(!looks_like_model_id("//example.invalid/path"));
+        assert!(!looks_like_model_id("../wcm"));
+        assert!(!looks_like_model_id("/home/user/git"));
+        assert!(!looks_like_model_id("logout/poweroff"));
+        assert!(!looks_like_model_id("accross"));
+        assert!(looks_like_model_id("gemini-3.5-flash-medium"));
+        assert!(looks_like_model_id("claude-sonnet-4.6-thinking"));
     }
 }

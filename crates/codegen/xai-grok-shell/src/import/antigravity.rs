@@ -384,18 +384,15 @@ pub fn scan_antigravity_in(
                 "sources_tried": model_rep.sources_tried,
             })),
         });
-        // Cache CLI results for offline re-scan
-        if model_rep
+        // Cache CLI-only results for offline re-scan (never history/catalog noise).
+        let cli_pairs: Vec<_> = model_rep
             .models
             .iter()
-            .any(|m| m.source == crate::providers::ModelListSource::ProviderCli)
-        {
-            let pairs: Vec<_> = model_rep
-                .models
-                .iter()
-                .map(|m| (m.id.clone(), m.display_name.clone()))
-                .collect();
-            let _ = crate::providers::cache_discovered_models(root, &pairs);
+            .filter(|m| m.source == crate::providers::ModelListSource::ProviderCli)
+            .map(|m| (m.id.clone(), m.display_name.clone()))
+            .collect();
+        if !cli_pairs.is_empty() {
+            let _ = crate::providers::cache_discovered_models(root, &cli_pairs);
         }
     }
     for n in model_rep.notes {
