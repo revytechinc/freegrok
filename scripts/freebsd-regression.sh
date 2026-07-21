@@ -3,6 +3,10 @@
 # Run on FreeBSD (e.g. freedev007) from the repo root:
 #   ./scripts/freebsd-regression.sh
 # Optional: PACKAGES="xai-grok-sandbox xai-grok-tools" ./scripts/freebsd-regression.sh
+#
+# After a successful release build, runs:
+#   target/release/xai-grok-pager doctor --ci
+# (offline product gate; see docs/user-guide/25-doctor.md)
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)

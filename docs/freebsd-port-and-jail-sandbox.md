@@ -49,11 +49,16 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 | Item | Status |
 |------|--------|
 | Branch | `freebsd-port-plan` → `origin/freebsd-port-plan` |
-| Phase 0 | Plan doc on branch |
-| Phase 1a | FreeBSD rg skip (shell + tools), jail stubs, nono = linux\|macos only |
-| Phase 1b | FreeBSD compile fixes landed (mid, sqlite-vec, workspace_classifier, apply_failed, support_info gates) |
-| FreeBSD platform verify | **V.1–V.3 green** + full package test matrix re-green on FreeBSD 15.1 (2026-07-20). Jail helper still Phase 2 (discovery ready). |
-| Ports collection | Native port design: `devel/grok-build` → package `grok-build-native`, binary **`grok-build`**. Leave **misc/grok-build** (Linux) alone. FreeBSD ports tree is manual submission only — do not auto-push ports. **`nucleo` path-vendored** (`third_party/nucleo`). Offline full `CARGO_CRATES` still open for poudriere. Local package install verified on freedev007. |
+| FreeBSD versions | **14, 15, 16** (16 = CURRENT/dev) |
+| Phase 0–1b | Done (rg skip, jail stubs, compile fixes, matrix green on 15.1-STABLE) |
+| `nucleo` | Path-vendored `third_party/nucleo` (no git dep under ports SKIP_GIT) |
+| Binary / package | Ports intent: `devel/grok-build` → package `grok-build-native`, bin **`grok-build`**. Leave **misc/grok-build** (Linux brand) alone. FreeBSD ports = **manual submission** (do not auto-push ports trees) |
+| `grok doctor` | Landed. Offline default; **`--ci`** build gate (critical-only, ≤15s). Wired into `scripts/freebsd-regression.sh` + cargo test |
+| `grok jail` | Scaffold: `status` / `catalog` / `setup` (dry-run). Default scope **helper-only** (TUI). `--full` advanced. **No `--apply` yet** |
+| Jail helper | Phase 2: still to implement real create + re-exec |
+| Offline crates | Full `CARGO_CRATES` for poudriere still open |
+
+User-facing docs: `crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md` (FreeBSD), `25-doctor.md`.
 
 Update this table when you complete work (date, host OS, rustc, pass/fail).
 
@@ -346,3 +351,4 @@ git checkout wip/grok-build-port 2>/dev/null || git checkout -b wip/grok-build-p
 | 2026-07-21 | FreeBSD 15.1 freedev007 | x86_64-unknown-freebsd 1.96.1 | **port design locked** | Binary name **`grok-build`** (not `grok` / not `xai-grok-pager`). Package `grok-build-native` coexists with misc/grok-build Linux. FreeBSD ports = manual submission; do not push ports from agents. Stage blocked on git `nucleo` under ports cargo SKIP_GIT until crates vendored. |
 | 2026-07-21 | FreeBSD 15.1 freedev007 | x86_64-unknown-freebsd 1.96.1 | **nucleo vendored + pkg install** | Path-vendored `third_party/nucleo` @ 5b74652 (no git dep). `make package` + install → `/usr/local/bin/grok-build` FreeBSD ELF; Linux `~/bin/grok` untouched. Completions + docs staged. Full offline `CARGO_CRATES` still TODO. |
 | 2026-07-21 | FreeBSD 15.1 freedev007 | x86_64-unknown-freebsd 1.96.1 | **`grok doctor` D1** | Unprivileged offline self-test: binary brand, rg, fs, config, sandbox status. Jail missing helper → **warn** (EPERM without privilege; not critical). Never sudo. Opt-in `--sandbox-deep` skips without helper. |
+| 2026-07-21 | FreeBSD 15.1 freedev007 | x86_64-unknown-freebsd 1.96.1 | **doctor --ci + jail scaffold** | `--ci` gate (critical-only, timeouts); regression + ports `doctor-ci`. `jail status/catalog/setup` dry-run; helper-only TUI default; catalog from download.freebsd.org; userland ≤ host. Docs: user-guide 18 FreeBSD + 25-doctor. |
