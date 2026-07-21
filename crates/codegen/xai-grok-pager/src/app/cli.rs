@@ -87,6 +87,8 @@ pub enum Command {
     Models,
     /// Discover local LLM installs and validate provider endpoints
     Providers(crate::providers_cmd::ProvidersArgs),
+    /// Export or import a portable Grok config bundle
+    Config(crate::config_cmd::ConfigArgs),
     /// List, search, or restore sessions
     Sessions(crate::sessions_cmd::SessionsArgs),
     /// Fetch and install managed configuration

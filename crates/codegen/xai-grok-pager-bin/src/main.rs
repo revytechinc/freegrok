@@ -1861,6 +1861,10 @@ async fn async_main() -> Result<()> {
                 init_tracing_simple("cli");
                 return xai_grok_pager::providers_cmd::run(providers_args).await;
             }
+            Command::Config(config_args) => {
+                init_tracing_simple("cli");
+                return xai_grok_pager::config_cmd::run(config_args).await;
+            }
             Command::Leader(leader_args) => {
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
