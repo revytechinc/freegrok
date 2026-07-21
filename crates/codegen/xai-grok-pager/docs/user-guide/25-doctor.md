@@ -38,6 +38,10 @@ Use this in packaging and FreeBSD regression. It:
 - Enforces a **15s** whole-run wall budget and short per-command timeouts (must not stall)
 
 ```bash
+# From a source tree (FreeBSD Makefile):
+make build && make doctor
+
+# Or cargo:
 cargo build -p xai-grok-pager-bin --release
 ./target/release/xai-grok-pager doctor --ci
 
@@ -45,7 +49,8 @@ cargo build -p xai-grok-pager-bin --release
 cargo test -p xai-grok-shell --lib doctor::tests::doctor_ci_gate_no_critical_failures
 ```
 
-FreeBSD ports WIP: `make doctor-ci` / `do-test` after a local release build (`GROK_REUSE_TARGET=yes`).
+After `make install`, run `grok-build doctor --ci`.  
+FreeBSD ports WIP: `make doctor-ci` / `do-test` with `GROK_REUSE_TARGET=yes`.
 
 ---
 

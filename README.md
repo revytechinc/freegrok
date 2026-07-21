@@ -56,31 +56,62 @@ features, and improvements in each release.
 Requirements:
 
 - **Rust** — the toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml);
-  `rustup` installs it automatically on first build.
-- **[DotSlash](https://dotslash-cli.com)** — required so hermetic tools under
-  [`bin/`](bin/) (notably [`bin/protoc`](bin/protoc)) can download and run.
-  Install it and ensure `dotslash` is on your `PATH` **before** building:
+  `rustup` installs it automatically on first build (or use FreeBSD `lang/rust`).
+- **protoc** — system `protoc` on `PATH`, or set `PROTOC=…`.  
+  FreeBSD: `pkg install protobuf` (the repo `bin/protoc` DotSlash helper has no FreeBSD asset).
+- **ripgrep** (runtime): FreeBSD builds do not bundle `rg` — `pkg install ripgrep`.
+- **[DotSlash](https://dotslash-cli.com)** — optional on FreeBSD if you use system
+  protoc; on macOS/Linux it may still be needed for hermetic `bin/protoc`:
 
   ```sh
   cargo install dotslash
-  # or: prebuilt packages — https://dotslash-cli.com/docs/installation/
-  /usr/bin/env dotslash --help   # sanity check
+  /usr/bin/env dotslash --help   # sanity check when using bin/protoc
   ```
 
-- **protoc** — proto codegen resolves [`bin/protoc`](bin/protoc) via DotSlash,
-  or falls back to a `protoc` on `PATH` / `$PROTOC`.
-- macOS and Linux are supported build hosts; Windows builds are best-effort
-  and not currently tested from this tree.
+- macOS, Linux, and **FreeBSD 14+** are supported build hosts; Windows is best-effort.
+
+### FreeBSD: Makefile install (no ports required)
+
+From a clone on FreeBSD 14, 15, or 16 (dev):
 
 ```sh
-cargo run -p xai-grok-pager-bin              # build + launch the TUI
-cargo build -p xai-grok-pager-bin --release  # release binary: target/release/xai-grok-pager
-cargo check -p xai-grok-pager-bin            # fast validation
+pkg install rust protobuf ripgrep         # once
+cd /path/to/grok-build
+make build                                # → target/release/xai-grok-pager
+make doctor                               # offline self-check (doctor --ci)
+doas make install                         # → /usr/local/bin/grok-build
+grok-build --version
+grok-build doctor --ci
 ```
 
-The binary artifact is named `xai-grok-pager`; official installs ship it as
-`grok`. On first launch it opens your browser to authenticate — see the
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `PREFIX` | `/usr/local` | Install root |
+| `BINNAME` | `grok-build` | Installed command name (avoids clashing with Linux brand `grok`) |
+| `DESTDIR` | empty | Staging root for packaging |
+| `PROTOC` | `protoc` | Protobuf compiler |
+
+```sh
+doas make uninstall                       # remove bin + completions + docs
+make install PREFIX=$$HOME/.local         # user-local (no root)
+```
+
+### Cargo (all platforms)
+
+```sh
+export PROTOC=$(command -v protoc)        # FreeBSD / system protoc
+cargo run -p xai-grok-pager-bin           # build + launch the TUI
+cargo build -p xai-grok-pager-bin --release  # → target/release/xai-grok-pager
+cargo check -p xai-grok-pager-bin
+```
+
+The cargo artifact is named `xai-grok-pager`. Official Linux/macOS installs ship it
+as `grok`. The FreeBSD Makefile installs it as **`grok-build`**. On first launch it
+opens a browser to authenticate — see the
 [authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
+
+FreeBSD ports packaging (optional, separate tree): see
+[`docs/freebsd-port-and-jail-sandbox.md`](docs/freebsd-port-and-jail-sandbox.md).
 
 ## Documentation
 

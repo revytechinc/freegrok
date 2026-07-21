@@ -29,10 +29,21 @@
 ```sh
 # Must pass in regression + ports do-test (offline, critical-only, ≤15s):
 target/release/xai-grok-pager doctor --ci
+# or: gmake doctor
 # cargo: doctor::tests::doctor_ci_gate_no_critical_failures
 ```
 
 `--ci` ignores warnings (e.g. jail helper), fails only on critical. No network/auth.
+
+### Source install without ports
+
+Root [`Makefile`](../Makefile):
+
+```sh
+pkg install rust protobuf ripgrep
+make build && make doctor
+doas make install           # PREFIX=/usr/local BINNAME=grok-build
+```
 
 ---
 

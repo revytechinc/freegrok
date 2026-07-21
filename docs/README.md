@@ -12,7 +12,18 @@ User-facing guides live with the pager package and are what ship under `~/.grok/
 |-----|----------|
 | [freebsd-port-and-jail-sandbox.md](./freebsd-port-and-jail-sandbox.md) | Port plan, platform verify, jail design (TUI-scoped), doctor CI gate, verification log |
 
-Quick FreeBSD checks after a native build or package install:
+### Source install without ports (FreeBSD)
+
+```sh
+pkg install rust protobuf ripgrep
+make build
+make doctor                  # doctor --ci
+doas make install            # /usr/local/bin/grok-build
+```
+
+See root [`Makefile`](../Makefile).
+
+### After install
 
 ```sh
 grok-build --version
