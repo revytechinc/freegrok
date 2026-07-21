@@ -1,0 +1,17 @@
+#!/bin/sh
+# Install:  ./scripts/git-hooks/install.sh
+# Or:       ln -sf ../../scripts/git-hooks/pre-commit .git/hooks/pre-commit
+#
+# Blocks commits that fail the best-effort PII/secret gate on *staged* files.
+# Bypass (please don't):  git commit --no-verify
+set -eu
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT"
+if [ -x scripts/check-pii.sh ]; then
+	exec scripts/check-pii.sh --staged
+fi
+# shell form if not marked executable yet
+if [ -f scripts/check-pii.sh ]; then
+	exec sh scripts/check-pii.sh --staged
+fi
+exit 0

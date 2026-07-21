@@ -45,6 +45,20 @@ run() {
 echo "START $(ts)" | tee -a "$SUMMARY"
 echo "host $(uname -srm)" | tee -a "$SUMMARY"
 echo "reg $REG" | tee -a "$SUMMARY"
+echo "git: $(git rev-parse --short HEAD 2>/dev/null) $(git branch --show-current 2>/dev/null)" | tee -a "$SUMMARY"
+
+# Best-effort PII/secret gate on the working tree (changed + untracked source).
+# Does not guarantee zero PII — see scripts/check-pii.sh header.
+note "check-pii"
+if sh "$ROOT/scripts/check-pii.sh" --changed >>"$LOG" 2>&1; then
+	ok "check-pii"
+else
+	bad "check-pii"
+	tail -40 "$LOG" || true
+	# Hard fail: do not install a tree that failed the identity/secret gate
+	echo "END $(ts) pass=$pass fail=$fail skip=$skip" | tee -a "$SUMMARY"
+	exit 1
+fi
 
 note "make build"
 if make build >>"$LOG" 2>&1; then ok "make build"; else
@@ -58,6 +72,7 @@ if make doctor >>"$LOG" 2>&1; then ok "make doctor"; else bad "make doctor"; fi
 
 # Isolate install into temp HOME so fallback lands at $REG/home/.local
 # without needing root, and without polluting the operator's real HOME.
+REAL_HOME="${REAL_HOME:-${HOME:-}}"
 export HOME="$REG/home"
 mkdir -p "$HOME"
 
@@ -92,6 +107,22 @@ run "jail-setup-dry" "$GB" jail setup
 run "jail-help" "$GB" jail --help
 run "mcp-list" "$GB" mcp list
 run "elf-freebsd" sh -c "file \"$GB\" | grep -qi freebsd"
+
+# Branch feature probes (multi-provider / config portability) — skip if absent.
+set +e
+"$GB" providers --help >>"$LOG" 2>&1
+ec=$?
+set -e
+if [ "$ec" -eq 0 ]; then
+	ok "providers-help"
+	run "providers-catalog" "$GB" providers catalog
+	run "providers-models-offline" "$GB" providers models --provider openai --offline
+	run "providers-import-antigravity" env HOME="${REAL_HOME:-$HOME}" "$GB" providers import-antigravity
+	run "config-export" sh -c "rm -rf \"$REG/cfg-export\" && \"$GB\" config export \"$REG/cfg-export\" --no-plugins && test -f \"$REG/cfg-export/manifest.json\""
+else
+	echo "SKIP providers-help (exit $ec)" | tee -a "$SUMMARY"
+	skip=$((skip + 1))
+fi
 
 set +e
 "$GB" doctor --ci >/dev/null 2>&1

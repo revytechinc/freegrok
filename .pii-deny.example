@@ -1,0 +1,9 @@
+# Copy to .pii-deny (gitignored) and add extra terms that should never
+# appear as identity in source you own — e.g. employer hostnames, nicknames.
+# One term per line. Lines starting with # are ignored.
+#
+#   cp .pii-deny.example .pii-deny
+#
+# Example (do not commit real values into the example file):
+# my-laptop-hostname
+# internal-codename

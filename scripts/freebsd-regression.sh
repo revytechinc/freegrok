@@ -39,6 +39,16 @@ echo "rg: $(rg --version 2>/dev/null | head -1 || echo missing)" | tee -a "$SUMM
 echo "cwd: $ROOT" | tee -a "$SUMMARY"
 echo "git: $(git rev-parse --short HEAD 2>/dev/null) $(git branch --show-current 2>/dev/null)" | tee -a "$SUMMARY"
 
+# Best-effort PII/secret gate (changed files). See scripts/check-pii.sh.
+if sh "$ROOT/scripts/check-pii.sh" --changed >>"$LOG" 2>&1; then
+	echo "PASS check-pii" | tee -a "$SUMMARY"
+else
+	echo "FAIL check-pii" | tee -a "$SUMMARY"
+	tail -30 "$LOG" || true
+	echo "END $(ts) (check-pii failed)" | tee -a "$SUMMARY"
+	exit 1
+fi
+
 # --- probes ---
 {
   echo "=== probe $(ts) ==="

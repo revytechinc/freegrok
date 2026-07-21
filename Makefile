@@ -36,9 +36,9 @@ ZSHCOMPDIR = $(IPREFIX)/share/zsh/site-functions
 FISHCOMPDIR = $(IPREFIX)/share/fish/vendor_completions.d
 MODELS_DEV_GZ = crates/codegen/xai-grok-models/catalog/models_dev.json.gz
 
-.PHONY: all build release install uninstall doctor check clean help preflight \
-	require-build ensure-build _install_all _install_bin _install_completions \
-	_install_docs _install_catalog
+.PHONY: all build release install uninstall doctor check check-pii clean help \
+	preflight require-build ensure-build hooks-install \
+	_install_all _install_bin _install_completions _install_docs _install_catalog
 
 # Default goal: bare "make" builds the release binary.
 all: build
@@ -52,11 +52,15 @@ help:
 	@echo "  make install    install $(BINNAME) (builds if needed; PREFIX=$(PREFIX); falls back to ~/\.local)"
 	@echo "  make uninstall  remove from PREFIX (or set PREFIX=$$HOME/.local)"
 	@echo "  make check      cargo check"
+	@echo "  make check-pii  best-effort PII/secret gate (staged/changed source)"
+	@echo "  make hooks-install  install git pre-commit → check-pii --staged"
 	@echo "  make clean      cargo clean"
 	@echo ""
 	@echo "PREFIX=$(PREFIX)  BINNAME=$(BINNAME)  PROTOC=$(PROTOC)"
 	@echo "Deps: pkg install rust protobuf ripgrep"
 	@echo "Example: make && make install  # build, then install"
+	@echo "PII gate is best-effort (operator identity + high-confidence secrets);"
+	@echo "  it does not prove zero PII. See scripts/check-pii.sh"
 
 preflight:
 	@if ! command -v $(CARGO) >/dev/null 2>&1; then \
@@ -93,6 +97,14 @@ ensure-build:
 
 check: preflight
 	env PROTOC="$(PROTOC)" $(CARGO) check -p $(CARGO_BIN_PKG)
+
+# Best-effort: operator identity + high-confidence secrets in changed/staged source.
+# Not a guarantee. Prefer: make hooks-install  so commits run --staged automatically.
+check-pii:
+	@sh scripts/check-pii.sh --changed
+
+hooks-install:
+	@sh scripts/git-hooks/install.sh
 
 doctor: ensure-build require-build
 	./$(RELEASE_BIN) doctor --ci
