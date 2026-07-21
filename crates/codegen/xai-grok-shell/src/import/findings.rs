@@ -13,6 +13,8 @@ pub enum SourceProduct {
     Cursor,
     Codex,
     Junie,
+    /// Google Antigravity CLI (`agy`) / Gemini home.
+    Antigravity,
     SharedMcp,
     LocalInference,
     Unknown,
@@ -27,6 +29,7 @@ impl SourceProduct {
             Self::Cursor => "Cursor",
             Self::Codex => "Codex",
             Self::Junie => "Junie",
+            Self::Antigravity => "Antigravity",
             Self::SharedMcp => "MCP",
             Self::LocalInference => "Local inference",
             Self::Unknown => "Unknown",
@@ -42,9 +45,10 @@ impl SourceProduct {
             Self::Cursor => 3,
             Self::Codex => 4,
             Self::Junie => 5,
-            Self::SharedMcp => 6,
-            Self::LocalInference => 7,
-            Self::Unknown => 8,
+            Self::Antigravity => 6,
+            Self::SharedMcp => 7,
+            Self::LocalInference => 8,
+            Self::Unknown => 9,
         }
     }
 }
@@ -188,5 +192,126 @@ impl FindReport {
             .filter(|f| matches!(f.local_diff, LocalDiff::Missing | LocalDiff::Different))
             .map(|f| f.id.clone())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_product_labels_and_ranks() {
+        assert_eq!(SourceProduct::Antigravity.label(), "Antigravity");
+        assert!(SourceProduct::Grok.preference_rank() < SourceProduct::Antigravity.preference_rank());
+        assert!(
+            SourceProduct::Antigravity.preference_rank() < SourceProduct::SharedMcp.preference_rank()
+        );
+        for p in [
+            SourceProduct::Grok,
+            SourceProduct::OpenCode,
+            SourceProduct::Claude,
+            SourceProduct::Cursor,
+            SourceProduct::Codex,
+            SourceProduct::Junie,
+            SourceProduct::Antigravity,
+            SourceProduct::SharedMcp,
+            SourceProduct::LocalInference,
+            SourceProduct::Unknown,
+        ] {
+            assert!(!p.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn find_report_summary_and_elect() {
+        let mut report = FindReport {
+            host: Some("box".into()),
+            remote_os: Some("FreeBSD".into()),
+            findings: vec![
+                RemoteFinding {
+                    id: "a".into(),
+                    kind: FindingKind::McpServer,
+                    source_tool: SourceProduct::Antigravity,
+                    remote_path: None,
+                    display_name: "honcho".into(),
+                    summary: "mcp".into(),
+                    content_hash: "h".into(),
+                    equivalence_key: "k".into(),
+                    exists_locally: false,
+                    local_diff: LocalDiff::Missing,
+                    account_id: None,
+                    secret_policy: SecretPolicy::Never,
+                    seen_in_products: vec![SourceProduct::Antigravity, SourceProduct::OpenCode],
+                    canonical_source: SourceProduct::Antigravity,
+                    duplicate_of: None,
+                    payload: None,
+                },
+                RemoteFinding {
+                    id: "b".into(),
+                    kind: FindingKind::Skill,
+                    source_tool: SourceProduct::Antigravity,
+                    remote_path: None,
+                    display_name: "dup".into(),
+                    summary: "x".into(),
+                    content_hash: "h2".into(),
+                    equivalence_key: "k2".into(),
+                    exists_locally: true,
+                    local_diff: LocalDiff::Same,
+                    account_id: None,
+                    secret_policy: SecretPolicy::Never,
+                    seen_in_products: vec![SourceProduct::Antigravity],
+                    canonical_source: SourceProduct::Antigravity,
+                    duplicate_of: Some("a".into()),
+                    payload: None,
+                },
+            ],
+            dedup: DedupStats {
+                raw: 2,
+                collapsed: 1,
+                buckets: 1,
+            },
+            notes: vec!["n1".into()],
+        };
+        let text = report.summary_text();
+        assert!(text.contains("Host: box"));
+        assert!(text.contains("NEW"));
+        assert!(text.contains("also:"));
+        assert!(text.contains("note: n1"));
+        let elect = report.elect_import_all_actionable();
+        assert_eq!(elect, vec!["a".to_string()]);
+        assert_eq!(report.dedup.saved(), 1);
+
+        // CONFLICT also elected
+        report.findings[0].local_diff = LocalDiff::Different;
+        report.findings[0].duplicate_of = None;
+        assert!(report
+            .elect_import_all_actionable()
+            .contains(&"a".to_string()));
+    }
+
+    #[test]
+    fn serde_roundtrip_finding() {
+        let f = RemoteFinding {
+            id: "x".into(),
+            kind: FindingKind::Account,
+            source_tool: SourceProduct::Antigravity,
+            remote_path: Some(PathBuf::from("/tmp")),
+            display_name: "oauth".into(),
+            summary: "s".into(),
+            content_hash: "h".into(),
+            equivalence_key: "e".into(),
+            exists_locally: false,
+            local_diff: LocalDiff::Missing,
+            account_id: Some("g".into()),
+            secret_policy: SecretPolicy::OptIn,
+            seen_in_products: vec![SourceProduct::Antigravity],
+            canonical_source: SourceProduct::Antigravity,
+            duplicate_of: None,
+            payload: Some(serde_json::json!({"k": 1})),
+        };
+        let j = serde_json::to_string(&f).unwrap();
+        let back: RemoteFinding = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.id, "x");
+        assert_eq!(back.source_tool, SourceProduct::Antigravity);
     }
 }

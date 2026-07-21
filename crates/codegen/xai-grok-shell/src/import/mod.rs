@@ -2,9 +2,11 @@
 //!
 //! - [`bundle`]: native Grok config export + re-import
 //! - [`opencode`]: OpenCode config scan
+//! - [`antigravity`]: Google Antigravity (`agy`) / Gemini home scan
 //! - [`ssh`]: OpenSSH transport (`~/.ssh/config`, keys, password via askpass)
 //! - [`dedup`] / [`findings`] / [`remote_paths`]: remote SSH import foundation
 
+pub mod antigravity;
 pub mod bundle;
 pub mod dedup;
 pub mod findings;
@@ -13,6 +15,9 @@ pub mod paths;
 pub mod remote_paths;
 pub mod ssh;
 
+pub use antigravity::{
+    scan_antigravity, scan_antigravity_in, AntigravityImport, AgyAuthKind, GEMINI_OPENAI_COMPAT_BASE,
+};
 pub use bundle::{
     export_config, export_summary, import_config, read_manifest, ExportOptions, ExportResult,
     ImportOptions, ImportReport, BUNDLE_FORMAT, BUNDLE_VERSION,

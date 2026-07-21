@@ -179,6 +179,50 @@ pub fn resolve_posix_catalog(home: &Path, os: RemoteOs) -> Vec<ResolvedPath> {
         "Home MCP config",
     );
 
+    // Google Antigravity / Gemini (agy)
+    push(
+        &mut out,
+        "agy.home",
+        P::Antigravity,
+        home.join(".gemini"),
+        "Gemini / Antigravity home",
+    );
+    push(
+        &mut out,
+        "agy.settings",
+        P::Antigravity,
+        home.join(".gemini/antigravity-cli/settings.json"),
+        "Antigravity CLI settings",
+    );
+    push(
+        &mut out,
+        "agy.oauth",
+        P::Antigravity,
+        home.join(".gemini/antigravity-cli/antigravity-oauth-token"),
+        "Antigravity OAuth token",
+    );
+    push(
+        &mut out,
+        "agy.mcp",
+        P::Antigravity,
+        home.join(".gemini/config/mcp_config.json"),
+        "Antigravity MCP config",
+    );
+    push(
+        &mut out,
+        "agy.skills.user",
+        P::Antigravity,
+        home.join(".gemini/config/skills"),
+        "Antigravity user skills",
+    );
+    push(
+        &mut out,
+        "agy.skills.builtin",
+        P::Antigravity,
+        home.join(".gemini/antigravity-cli/builtin/skills"),
+        "Antigravity builtin skills",
+    );
+
     // Agents / skills roots
     push(
         &mut out,
@@ -286,6 +330,27 @@ pub fn resolve_windows_catalog(
         userprofile.join(".ollama"),
         "Ollama",
     );
+    push(
+        &mut out,
+        "agy.home",
+        P::Antigravity,
+        userprofile.join(".gemini"),
+        "Gemini / Antigravity home",
+    );
+    push(
+        &mut out,
+        "agy.mcp",
+        P::Antigravity,
+        userprofile.join(".gemini\\config\\mcp_config.json"),
+        "Antigravity MCP",
+    );
+    push(
+        &mut out,
+        "agy.settings",
+        P::Antigravity,
+        userprofile.join(".gemini\\antigravity-cli\\settings.json"),
+        "Antigravity settings",
+    );
 
     if let Some(ad) = appdata {
         push(
@@ -362,6 +427,12 @@ pub fn project_catalog(cwd: &Path) -> Vec<ResolvedPath> {
             absolute: cwd.join("AGENTS.md"),
             description: "AGENTS.md".into(),
         },
+        ResolvedPath {
+            id: "project.agy.mcp".into(),
+            product: P::Antigravity,
+            absolute: cwd.join(".agents/mcp_config.json"),
+            description: "Project Antigravity MCP".into(),
+        },
     ]
 }
 
@@ -374,14 +445,52 @@ mod tests {
         assert_eq!(RemoteOs::detect_from_uname("FreeBSD"), RemoteOs::FreeBsd);
         assert_eq!(RemoteOs::detect_from_uname("Darwin"), RemoteOs::MacOs);
         assert_eq!(RemoteOs::detect_from_uname("Linux"), RemoteOs::Linux);
+        assert_eq!(RemoteOs::detect_from_uname("OpenBSD"), RemoteOs::OpenBsd);
+        assert_eq!(RemoteOs::detect_from_uname("NetBSD"), RemoteOs::NetBsd);
+        assert_eq!(RemoteOs::detect_from_uname("MINGW64_NT"), RemoteOs::Windows);
+        assert_eq!(RemoteOs::detect_from_uname("unknown-os"), RemoteOs::Unknown);
+        assert_eq!(RemoteOs::FreeBsd.label(), "FreeBSD");
+        assert_eq!(RemoteOs::MacOs.label(), "macOS");
+        assert_eq!(RemoteOs::Windows.label(), "Windows");
     }
 
     #[test]
-    fn posix_catalog_includes_ollama_and_mcp() {
+    fn posix_catalog_includes_ollama_mcp_and_agy() {
         let home = PathBuf::from("/home/alice");
         let paths = resolve_posix_catalog(&home, RemoteOs::Linux);
         assert!(paths.iter().any(|p| p.id == "ollama.home"));
         assert!(paths.iter().any(|p| p.id == "cursor.mcp"));
         assert!(paths.iter().any(|p| p.id == "opencode.config"));
+        assert!(paths.iter().any(|p| p.id == "agy.home"));
+        assert!(paths.iter().any(|p| p.id == "agy.mcp"));
+        assert!(paths.iter().any(|p| p.id == "agy.oauth"));
+        assert!(paths.iter().any(|p| p.id == "agy.settings"));
+    }
+
+    #[test]
+    fn posix_macos_jetbrains_path() {
+        let home = PathBuf::from("/Users/alice");
+        let paths = resolve_posix_catalog(&home, RemoteOs::MacOs);
+        assert!(paths.iter().any(|p| p.id == "jetbrains.mac"));
+        assert!(!paths.iter().any(|p| p.id == "jetbrains.xdg"));
+    }
+
+    #[test]
+    fn windows_catalog_includes_agy() {
+        let up = PathBuf::from(r"C:\Users\alice");
+        let ad = PathBuf::from(r"C:\Users\alice\AppData\Roaming");
+        let la = PathBuf::from(r"C:\Users\alice\AppData\Local");
+        let paths = resolve_windows_catalog(&up, Some(&ad), Some(&la));
+        assert!(paths.iter().any(|p| p.id == "agy.home"));
+        assert!(paths.iter().any(|p| p.id == "agy.mcp"));
+        assert!(paths.iter().any(|p| p.id == "opencode.appdata"));
+    }
+
+    #[test]
+    fn project_catalog_includes_agy_mcp() {
+        let cwd = PathBuf::from("/proj");
+        let paths = project_catalog(&cwd);
+        assert!(paths.iter().any(|p| p.id == "project.agy.mcp"));
+        assert!(paths.iter().any(|p| p.id == "project.grok"));
     }
 }

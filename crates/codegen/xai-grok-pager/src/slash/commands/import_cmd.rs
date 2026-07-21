@@ -1,7 +1,7 @@
-//! `/import` — multi-source import scan (OpenCode first; Claude via /import-claude).
+//! `/import` — multi-source import scan (OpenCode, Antigravity, Claude, …).
 
 use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand};
-use xai_grok_shell::import::scan_opencode;
+use xai_grok_shell::import::{scan_antigravity, scan_opencode};
 use xai_grok_shell::providers::{discover_installed, DiscoverOptions};
 
 pub struct ImportCommand;
@@ -12,11 +12,11 @@ impl SlashCommand for ImportCommand {
     }
 
     fn description(&self) -> &str {
-        "Scan sibling tools for importable config (opencode | cursor | junie | claude)"
+        "Scan sibling tools for importable config (opencode | antigravity | cursor | junie | claude)"
     }
 
     fn usage(&self) -> &str {
-        "/import [opencode|cursor|junie|claude]"
+        "/import [opencode|antigravity|agy|gemini|cursor|junie|claude]"
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
@@ -25,9 +25,12 @@ impl SlashCommand for ImportCommand {
             "" | "all" => {
                 let disc = discover_installed(&DiscoverOptions::default());
                 let oc = scan_opencode(std::env::current_dir().ok().as_deref());
+                let agy = scan_antigravity();
                 let mut msg = disc.summary_text();
                 msg.push_str("\n\n");
                 msg.push_str(&oc.summary_text());
+                msg.push_str("\n\n");
+                msg.push_str(&agy.summary_text());
                 msg.push_str("\n\nClaude: use /import-claude for interactive settings import.\n");
                 msg.push_str("Cursor/Junie: detected paths appear under discovery when present.\n");
                 CommandResult::Message(msg)
@@ -35,6 +38,10 @@ impl SlashCommand for ImportCommand {
             "opencode" | "oc" => {
                 let oc = scan_opencode(std::env::current_dir().ok().as_deref());
                 CommandResult::Message(oc.summary_text())
+            }
+            "antigravity" | "agy" | "gemini" => {
+                let agy = scan_antigravity();
+                CommandResult::Message(agy.summary_text())
             }
             "claude" => CommandResult::Message(
                 "Use /import-claude for the interactive Claude settings import modal.".into(),
@@ -60,9 +67,15 @@ impl SlashCommand for ImportCommand {
                 } else {
                     let mut msg = String::from("Cursor paths:\n");
                     for i in cursor {
-                        msg.push_str(&format!("  • {} — {}\n", i.label, i.detail.as_deref().unwrap_or("")));
+                        msg.push_str(&format!(
+                            "  • {} — {}\n",
+                            i.label,
+                            i.detail.as_deref().unwrap_or("")
+                        ));
                     }
-                    msg.push_str("MCP/rules are live-discovered; model keys: use env + [model.*].\n");
+                    msg.push_str(
+                        "MCP/rules are live-discovered; model keys: use env + [model.*].\n",
+                    );
                     CommandResult::Message(msg)
                 }
             }
@@ -86,7 +99,7 @@ impl SlashCommand for ImportCommand {
                 }
             }
             other => CommandResult::Error(format!(
-                "unknown import source {other:?}; try opencode|cursor|junie|claude"
+                "unknown import source {other:?}; try opencode|antigravity|agy|cursor|junie|claude"
             )),
         }
     }

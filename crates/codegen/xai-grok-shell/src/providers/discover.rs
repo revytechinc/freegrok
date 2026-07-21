@@ -197,14 +197,24 @@ pub fn discover_installed(opts: &DiscoverOptions) -> FoundInstallReport {
                     home.join(".local/share/opencode"),
                     "OpenCode auth store",
                 ),
+                (
+                    "antigravity",
+                    home.join(".gemini"),
+                    "Antigravity / Gemini home (agy)",
+                ),
             ];
             for (id, path, label) in siblings {
                 if path_exists(path) {
+                    let provider_id = match *id {
+                        "antigravity" => Some("antigravity".to_string()),
+                        "opencode" | "opencode-auth" => Some("opencode".to_string()),
+                        _ => None,
+                    };
                     items.push(FoundItem {
                         kind: FoundKind::SiblingTool,
                         id: format!("sibling:{id}"),
                         label: (*label).to_string(),
-                        provider_id: None,
+                        provider_id,
                         base_url: None,
                         credential_present: false,
                         reachable: true,
