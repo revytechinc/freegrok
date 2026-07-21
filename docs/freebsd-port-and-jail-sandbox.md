@@ -39,7 +39,7 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 | Phase 1a | FreeBSD rg skip (shell + tools), jail stubs, nono = linux\|macos only |
 | Phase 1b | FreeBSD compile fixes landed (mid, sqlite-vec, workspace_classifier, apply_failed, support_info gates) |
 | FreeBSD platform verify | **V.1–V.3 green** + full package test matrix re-green on FreeBSD 15.1 (2026-07-20). Jail helper still Phase 2 (discovery ready). |
-| Ports collection | Native port design: `devel/grok-build` → package `grok-build-native`, binary **`grok-build`**. Leave **misc/grok-build** (Linux) alone. FreeBSD ports tree is manual submission only — do not auto-push ports. Offline `CARGO_CRATES` + `nucleo` git dep still open. |
+| Ports collection | Native port design: `devel/grok-build` → package `grok-build-native`, binary **`grok-build`**. Leave **misc/grok-build** (Linux) alone. FreeBSD ports tree is manual submission only — do not auto-push ports. **`nucleo` path-vendored** (`third_party/nucleo`). Offline full `CARGO_CRATES` still open for poudriere. Local package install verified on freedev007. |
 
 Update this table when you complete work (date, host OS, rustc, pass/fail).
 
