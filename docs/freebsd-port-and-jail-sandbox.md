@@ -188,32 +188,25 @@ Append a short log under **Verification log** at the bottom of this file when yo
 
 Phase 2 still needed: real `jail_reexec_command` / helper, nullfs denies, optional local-only net.
 
-### Jail provisioning (Phase 2 design)
+### Jail provisioning (Phase 2) — TUI product scope
 
-**Two roles (do not conflate):**
+**Stay a coding TUI.** Do not grow into a FreeBSD control panel / mini OS installer.
 
-| Role | Purpose | Network |
-|------|---------|---------|
-| **Ephemeral sandbox jail** | bwrap analog: re-exec agent tools with FS denies | **None** by default (console/`jexec`). Linux Landlock/bwrap also need no net for FS isolation |
-| **Provisioned agent jail** | Optional longer-lived rootfs + user for isolation | **Local only** (no public IP; optional `127.0.0.1` SSH later) |
+| Path | When | Network | Privilege |
+|------|------|---------|-----------|
+| **Default: helper-only** | Want OS isolation for agent tools (bwrap analog) | **None** (console/`jexec`) | One-shot doas/sudo after short modal; refuse = keep working |
+| **Advanced: `--full` base** | Optional persistent root | Local only | Same modal; userland ≤ host from download.freebsd.org |
 
-**Base source:** `https://download.freebsd.org/ftp/…` (`ftp.freebsd.org` redirects there).  
-List `releases/{arch}/{arch}/` and `snapshots/{arch}/{arch}/` for `*-RELEASE` / `*-STABLE` / `*-CURRENT`, then `base.txz`.
+**Do not** auto-download multi‑hundred‑MB bases on first launch. **Do not** require SSH, second user, or networking for the default path. **Do not** re-prompt after dismiss (config/env later).
 
-**Host version rule (15.1-STABLE example):** jail userland **must not exceed host** (no 16.0-CURRENT on 15.1). Prefer matching `15.1-RELEASE`; older 14.x is OK.
-
-**Privilege UX:** before any doas/sudo, show modal/CLI copy explaining why root is needed (create jail, extract base, helper rule). Refuse → continue degraded. Never passwordless silent escalate.
-
-**CLI (landed scaffolding):**
+**Host rule:** jail userland ≤ host (15.1 cannot run 16 CURRENT). Source: `download.freebsd.org` (ftp.freebsd.org redirects).
 
 ```sh
-grok-build jail status          # offline
-grok-build jail catalog         # online catalog, ✓/✗ vs host
-grok-build jail setup           # dry-run plan + privilege text
-grok-build jail setup --apply   # not implemented yet
+grok jail status              # offline
+grok jail setup               # dry-run helper-only + privilege copy
+grok jail catalog             # optional online list
+grok jail setup --full        # advanced rootfs plan only
 ```
-
-**Install methods (planned):** (1) base.txz extract + `jail -c`, (2) helper setuid/doas, (3) optional prebuilt root under `/usr/local/grok/jails/`. User + doas + optional localhost SSH keys after create.
 
 ---
 

@@ -517,10 +517,10 @@ fn check_sandbox_jail_status() -> CheckResult {
             tier: "default".into(),
             severity: Severity::Warn,
             status: Status::Warn,
-            summary: "FreeBSD jail sandbox not active (no helper)".into(),
+            summary: "OS isolation optional (no jail helper)".into(),
             detail: Some(detail),
             fix: Some(
-                "Admin once: install privileged grok-jail-helper. Unprivileged jail create is not supported. Product continues without OS sandbox."
+                "Optional: `grok jail setup` (dry-run). Agent works without it. doctor --ci ignores this warn."
                     .into(),
             ),
             requires: vec![],

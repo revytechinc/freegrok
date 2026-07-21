@@ -178,21 +178,50 @@ impl Default for JailNetworkMode {
     }
 }
 
+/// What setup would do. Prefer **helper-only** for the TUI product path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JailSetupScope {
+    /// Product default: privileged helper for ephemeral re-exec (bwrap analog).
+    /// No full base install, no SSH, no second user account.
+    #[default]
+    HelperOnly,
+    /// Advanced: download base.txz + persistent root (still local-only network).
+    FullRootfs,
+}
+
 /// Dry-run plan for provisioning (no privilege, no download).
 #[derive(Debug, Clone)]
 pub struct JailProvisionPlan {
     pub host: FreeBsdVersion,
-    pub selected_base: FreeBsdVersion,
-    pub base_url: String,
+    pub selected_base: Option<FreeBsdVersion>,
+    pub base_url: Option<String>,
+    pub scope: JailSetupScope,
     pub network: JailNetworkMode,
     pub root_path: String,
     pub jail_name: String,
-    pub create_user: String,
+    pub create_user: Option<String>,
     pub enable_local_ssh: bool,
     pub privilege_reason: String,
 }
 
 impl JailProvisionPlan {
+    /// Default product path: helper only (TUI agent isolation).
+    pub fn helper_only(host: FreeBsdVersion) -> Self {
+        Self {
+            host,
+            selected_base: None,
+            base_url: None,
+            scope: JailSetupScope::HelperOnly,
+            network: JailNetworkMode::None,
+            root_path: String::new(),
+            jail_name: "ephemeral".into(),
+            create_user: None,
+            enable_local_ssh: false,
+            privilege_reason: PRIVILEGE_REASON.into(),
+        }
+    }
+
+    /// Advanced full rootfs plan (still local-only; not the default TUI path).
     pub fn for_host(
         host: FreeBsdVersion,
         selected: FreeBsdVersion,
@@ -207,31 +236,33 @@ impl JailProvisionPlan {
         let base_url = base_txz_url(arch, &selected);
         Ok(Self {
             host: host.clone(),
-            selected_base: selected,
-            base_url,
+            selected_base: Some(selected),
+            base_url: Some(base_url),
+            scope: JailSetupScope::FullRootfs,
             network: JailNetworkMode::None,
             root_path: "/usr/local/grok/jails/agent".into(),
             jail_name: "grok-agent".into(),
-            create_user: "grok".into(),
+            create_user: Some("grok".into()),
             enable_local_ssh: false,
             privilege_reason: PRIVILEGE_REASON.into(),
         })
     }
 }
 
-/// Shown in TUI modal / CLI before any doas/sudo.
+/// One-screen TUI/CLI privilege copy (keep short — this is not a system installer).
 pub const PRIVILEGE_REASON: &str = "\
-Grok needs temporary administrator rights to create a FreeBSD jail for agent \
-isolation (same role as bubblewrap on Linux). This will:
+Grok wants temporary admin rights to install a small FreeBSD jail helper so \
+agent shell/file tools can run with OS isolation (like Linux bubblewrap).
 
-  • download a FreeBSD base.txz matching or older than this host
-  • extract it under /usr/local/grok/jails/ (local disk only)
-  • create a jail with no public network (console/jexec; optional localhost only)
-  • create a dedicated user and optional localhost SSH keys
-  • install a narrow doas/sudo rule for the grok-jail-helper only
+  • One-time: place helper + narrow doas/sudo rule
+  • Optional later: local base.txz root (userland ≤ this host; no public network)
+  • Default: console/jexec only — no internet-facing services
 
-Nothing is exposed on external interfaces. You can refuse; Grok continues \
-without OS sandbox (degraded isolation).";
+You can decline. Grok keeps working without that isolation.";
+
+/// Even shorter status-line / tip form.
+pub const PRIVILEGE_REASON_ONE_LINE: &str =
+    "Optional: install jail helper (admin once) for OS isolation; decline keeps Grok usable.";
 
 #[cfg(test)]
 mod tests {
@@ -295,5 +326,15 @@ mod tests {
         let host = FreeBsdVersion::parse("15.1-STABLE").unwrap();
         let bad = FreeBsdVersion::parse("16.0-CURRENT").unwrap();
         assert!(JailProvisionPlan::for_host(host, bad, "amd64").is_err());
+    }
+
+    #[test]
+    fn helper_only_is_default_product_scope() {
+        let host = FreeBsdVersion::parse("15.1-STABLE").unwrap();
+        let p = JailProvisionPlan::helper_only(host);
+        assert_eq!(p.scope, JailSetupScope::HelperOnly);
+        assert!(p.selected_base.is_none());
+        assert!(!p.enable_local_ssh);
+        assert!(p.privilege_reason.len() < 600);
     }
 }

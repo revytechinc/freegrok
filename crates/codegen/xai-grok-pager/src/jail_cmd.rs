@@ -1,14 +1,15 @@
-//! FreeBSD jail catalog / dry-run setup (`grok jail …`).
+//! FreeBSD jail helpers for the **TUI product** (agent isolation), not a jail OS manager.
 //!
-//! Real privilege escalation + jail create lands with `grok-jail-helper`.
-//! This command is safe offline for `status` / plan; `catalog` needs network.
+//! Default path: optional privileged **helper** (bubblewrap analog). Full base.txz
+//! roots / SSH are advanced (`setup --full`) and still local-only.
 
 use clap::{Args, Subcommand};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use xai_grok_sandbox::jail_catalog::{
-    FreeBsdVersion, JailProvisionPlan, PRIVILEGE_REASON, base_txz_url, catalog_index_urls,
-    jail_userland_compatible, parse_directory_index, parse_host_version, preferred_jail_base,
+    FreeBsdVersion, JailProvisionPlan, JailSetupScope, PRIVILEGE_REASON, PRIVILEGE_REASON_ONE_LINE,
+    base_txz_url, catalog_index_urls, jail_userland_compatible, parse_directory_index,
+    parse_host_version, preferred_jail_base,
 };
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);
@@ -21,27 +22,29 @@ pub struct JailArgs {
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum JailCommand {
-    /// Host jail backend status (offline)
+    /// Host jail backend status (offline, fast)
     Status {
         #[arg(long)]
         json: bool,
     },
-    /// List FreeBSD base versions from download.freebsd.org (online)
+    /// List FreeBSD bases from download.freebsd.org (online; optional)
     Catalog {
         #[arg(long)]
         json: bool,
-        /// CPU arch folder (default: host amd64/aarch64 mapping)
         #[arg(long)]
         arch: Option<String>,
     },
-    /// Print privilege reason + dry-run provision plan (no sudo)
+    /// Dry-run setup plan + privilege text (default: helper-only, no download)
     Setup {
         #[arg(long)]
         json: bool,
-        /// Base version raw name (default: preferred compatible RELEASE)
+        /// Advanced: plan a full base.txz root (still local-only; not the TUI default)
+        #[arg(long)]
+        full: bool,
+        /// Base version for --full (default: preferred compatible RELEASE)
         #[arg(long)]
         base: Option<String>,
-        /// Actually escalate (not implemented — prints how)
+        /// Not implemented — would escalate after explicit confirm
         #[arg(long)]
         apply: bool,
     },
@@ -51,7 +54,12 @@ pub async fn run(args: JailArgs) -> anyhow::Result<()> {
     match args.command {
         JailCommand::Status { json } => run_status(json),
         JailCommand::Catalog { json, arch } => run_catalog(json, arch).await,
-        JailCommand::Setup { json, base, apply } => run_setup(json, base, apply).await,
+        JailCommand::Setup {
+            json,
+            full,
+            base,
+            apply,
+        } => run_setup(json, full, base, apply).await,
     }
 }
 
@@ -72,7 +80,6 @@ fn host_release_string() -> String {
 }
 
 fn host_arch() -> String {
-    // FreeBSD download paths use amd64/aarch64 (not x86_64).
     match std::env::consts::ARCH {
         "x86_64" => "amd64".into(),
         "aarch64" => "aarch64".into(),
@@ -92,72 +99,68 @@ fn run_status(json: bool) -> anyhow::Result<()> {
     let helper = "(n/a)".to_string();
 
     if json {
-        let payload = serde_json::json!({
-            "hostRelease": release,
-            "hostParsed": host.as_ref().map(|h| &h.raw),
-            "arch": host_arch(),
-            "backend": backend,
-            "helper": helper,
-            "networkDefault": "none (console/jexec; Linux bwrap also needs no net for FS isolation)",
-            "privilegeReason": PRIVILEGE_REASON,
-        });
-        println!("{}", serde_json::to_string_pretty(&payload)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "productPath": "helper-only (ephemeral agent isolation)",
+                "hostRelease": release,
+                "hostParsed": host.as_ref().map(|h| &h.raw),
+                "arch": host_arch(),
+                "backend": backend,
+                "helper": helper,
+                "networkDefault": "none",
+                "tip": PRIVILEGE_REASON_ONE_LINE,
+                "next": "grok jail setup   # dry-run; optional",
+            }))?
+        );
         return Ok(());
     }
 
-    println!("Grok jail status");
-    println!("  Host:     {release}");
+    println!("Jail (agent isolation — not a system manager)");
+    println!("  Host:    {release}");
     if let Some(h) = &host {
-        println!("  Parsed:   {} (major={}.{})", h.raw, h.major, h.minor);
+        println!("  Parsed:  {}.{} ({})", h.major, h.minor, h.branch);
     }
-    println!("  Arch:     {}", host_arch());
-    println!("  Backend:  {backend}");
-    println!("  Helper:   {helper}");
-    println!("  Network:  none by default (local console / jexec)");
-    println!();
-    println!("Privilege (shown before any doas/sudo):");
-    for line in PRIVILEGE_REASON.lines() {
-        println!("  {line}");
-    }
+    println!("  Helper:  {helper}");
+    println!("  Network: none by default (console/jexec)");
+    println!("  Tip:     {PRIVILEGE_REASON_ONE_LINE}");
+    println!("  Next:    grok jail setup");
     Ok(())
 }
 
 async fn run_catalog(json: bool, arch: Option<String>) -> anyhow::Result<()> {
     let arch = arch.unwrap_or_else(host_arch);
     let release = host_release_string();
-    let host = parse_host_version(&release).ok_or_else(|| {
-        anyhow::anyhow!("cannot parse host FreeBSD version from {release:?}")
-    })?;
+    let host = parse_host_version(&release)
+        .ok_or_else(|| anyhow::anyhow!("cannot parse host FreeBSD version from {release:?}"))?;
 
     let mut all = Vec::new();
     for url in catalog_index_urls(&arch) {
         match fetch_text(&url) {
             Ok(html) => all.extend(parse_directory_index(&html)),
-            Err(e) => eprintln!("warn: catalog fetch {url}: {e}"),
+            Err(e) => eprintln!("warn: {url}: {e}"),
         }
     }
-    // Dedupe by raw
     all.sort_by(|a, b| a.raw.cmp(&b.raw));
     all.dedup_by(|a, b| a.raw == b.raw);
 
-    let mut rows: Vec<serde_json::Value> = Vec::new();
+    let preferred = preferred_jail_base(&host, &all).map(|v| v.raw.clone());
+    let mut rows = Vec::new();
     for v in &all {
-        let ok = jail_userland_compatible(&host, v);
         rows.push(serde_json::json!({
             "version": v.raw,
-            "compatible": ok,
+            "compatible": jail_userland_compatible(&host, v),
             "baseTxz": base_txz_url(&arch, v),
         }));
     }
-    let preferred = preferred_jail_base(&host, &all).map(|v| v.raw.clone());
 
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "source": "https://download.freebsd.org/ftp (ftp.freebsd.org redirects here)",
+                "note": "Catalog is for advanced --full roots; TUI default is helper-only",
+                "source": "https://download.freebsd.org/ftp",
                 "host": host.raw,
-                "arch": arch,
                 "preferred": preferred,
                 "bases": rows,
             }))?
@@ -165,51 +168,53 @@ async fn run_catalog(json: bool, arch: Option<String>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!("FreeBSD bases (download.freebsd.org) for host {}", host.raw);
+    println!("Bases for host {} (userland ≤ host only)", host.raw);
     println!("  preferred: {}", preferred.as_deref().unwrap_or("(none)"));
-    println!();
+    println!("  (TUI default does not install these — helper-only path.)");
     for v in &all {
         let mark = if jail_userland_compatible(&host, v) {
             "✓"
         } else {
             "✗"
         };
-        println!("  {mark} {}  {}", v.raw, base_txz_url(&arch, v));
+        println!("  {mark} {}", v.raw);
     }
-    println!();
-    println!("✗ = newer than host — cannot install as jail userland on this kernel");
     Ok(())
 }
 
-async fn run_setup(json: bool, base: Option<String>, apply: bool) -> anyhow::Result<()> {
+async fn run_setup(json: bool, full: bool, base: Option<String>, apply: bool) -> anyhow::Result<()> {
     let arch = host_arch();
     let release = host_release_string();
-    let host = parse_host_version(&release).ok_or_else(|| {
-        anyhow::anyhow!("cannot parse host FreeBSD version from {release:?}")
-    })?;
+    let host = parse_host_version(&release)
+        .ok_or_else(|| anyhow::anyhow!("cannot parse host FreeBSD version from {release:?}"))?;
 
-    let selected = if let Some(b) = base {
-        FreeBsdVersion::parse(&b).ok_or_else(|| anyhow::anyhow!("bad --base {b}"))?
-    } else {
-        // Prefer offline plan with host-matching RELEASE name; catalog if online works.
-        let mut catalog = Vec::new();
-        for url in catalog_index_urls(&arch) {
-            if let Ok(html) = fetch_text(&url) {
-                catalog.extend(parse_directory_index(&html));
-            }
-        }
-        if let Some(p) = preferred_jail_base(&host, &catalog) {
-            p.clone()
+    let plan = if full {
+        let selected = if let Some(b) = base {
+            FreeBsdVersion::parse(&b).ok_or_else(|| anyhow::anyhow!("bad --base {b}"))?
         } else {
-            // Fallback guess: same major.minor RELEASE
-            let guess = format!("{}.{}-RELEASE", host.major, host.minor);
-            FreeBsdVersion::parse(&guess).ok_or_else(|| {
-                anyhow::anyhow!("no catalog + cannot invent base for {}", host.raw)
-            })?
-        }
+            let mut catalog = Vec::new();
+            for url in catalog_index_urls(&arch) {
+                if let Ok(html) = fetch_text(&url) {
+                    catalog.extend(parse_directory_index(&html));
+                }
+            }
+            if let Some(p) = preferred_jail_base(&host, &catalog) {
+                p.clone()
+            } else {
+                let guess = format!("{}.{}-RELEASE", host.major, host.minor);
+                FreeBsdVersion::parse(&guess)
+                    .ok_or_else(|| anyhow::anyhow!("no base for {}", host.raw))?
+            }
+        };
+        JailProvisionPlan::for_host(host, selected, &arch).map_err(anyhow::Error::msg)?
+    } else {
+        JailProvisionPlan::helper_only(host)
     };
 
-    let plan = JailProvisionPlan::for_host(host, selected, &arch).map_err(anyhow::Error::msg)?;
+    let escalators = (
+        which("doas").is_some(),
+        which("sudo").is_some(),
+    );
 
     if json {
         println!(
@@ -217,54 +222,50 @@ async fn run_setup(json: bool, base: Option<String>, apply: bool) -> anyhow::Res
             serde_json::to_string_pretty(&serde_json::json!({
                 "dryRun": !apply,
                 "applyImplemented": false,
+                "scope": format!("{:?}", plan.scope),
                 "host": plan.host.raw,
-                "base": plan.selected_base.raw,
+                "base": plan.selected_base.as_ref().map(|b| &b.raw),
                 "baseUrl": plan.base_url,
                 "network": format!("{:?}", plan.network),
                 "rootPath": plan.root_path,
-                "jailName": plan.jail_name,
                 "user": plan.create_user,
                 "localSsh": plan.enable_local_ssh,
                 "privilegeReason": plan.privilege_reason,
-                "escalators": {
-                    "doas": which("doas").is_some(),
-                    "sudo": which("sudo").is_some(),
-                },
+                "doas": escalators.0,
+                "sudo": escalators.1,
+                "workflow": "Optional. Run only if you want OS isolation. doctor --ci does not require this.",
             }))?
         );
         return Ok(());
     }
 
-    println!("Grok jail setup (dry-run)");
+    println!("Jail setup (dry-run) — optional for Grok TUI");
+    println!(
+        "  Scope:    {}",
+        match plan.scope {
+            JailSetupScope::HelperOnly => "helper-only (recommended)",
+            JailSetupScope::FullRootfs => "full rootfs (advanced)",
+        }
+    );
     println!("  Host:     {}", plan.host.raw);
-    println!("  Base:     {} ", plan.selected_base.raw);
-    println!("  URL:      {}", plan.base_url);
-    println!("  Path:     {}", plan.root_path);
-    println!("  Name:     {}", plan.jail_name);
-    println!("  User:     {}", plan.create_user);
-    println!("  Network:  {:?} (no public IP; agent isolation is console/jexec)", plan.network);
-    println!(
-        "  Local SSH:{} (optional later; ListenAddress 127.0.0.1 only)",
-        plan.enable_local_ssh
-    );
-    println!(
-        "  Escalators: doas={} sudo={}",
-        which("doas").is_some(),
-        which("sudo").is_some()
-    );
+    if let Some(b) = &plan.selected_base {
+        println!("  Base:     {b}");
+    }
+    if let Some(u) = &plan.base_url {
+        println!("  URL:      {u}");
+    }
+    println!("  Network:  {:?} (no public exposure)", plan.network);
+    println!("  doas/sudo: {}/{}", escalators.0, escalators.1);
     println!();
-    println!("=== privilege modal copy ===");
+    println!("--- why admin? (modal copy) ---");
     for line in plan.privilege_reason.lines() {
         println!("{line}");
     }
-    println!("=== end ===");
-    println!();
+    println!("---");
     if apply {
-        anyhow::bail!(
-            "--apply is not implemented yet. Next: TUI modal → doas/sudo → grok-jail-helper create"
-        );
+        anyhow::bail!("--apply not implemented yet (helper install + optional base)");
     }
-    println!("No changes made. Re-run with a future --apply after confirming the modal.");
+    println!("No changes. Decline anytime; agent still runs.");
     Ok(())
 }
 
@@ -280,7 +281,6 @@ fn which(bin: &str) -> Option<std::path::PathBuf> {
 }
 
 fn fetch_text(url: &str) -> Result<String, String> {
-    // FreeBSD fetch(1); fall back to curl. Hard timeout — never stall builds.
     if which("fetch").is_some() {
         let mut cmd = Command::new("fetch");
         cmd.args(["-q", "-o", "-", "-T", "10", url]);
@@ -288,10 +288,7 @@ fn fetch_text(url: &str) -> Result<String, String> {
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
         }
-        return Err(format!(
-            "fetch failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }
     if which("curl").is_some() {
         let mut cmd = Command::new("curl");
@@ -300,12 +297,9 @@ fn fetch_text(url: &str) -> Result<String, String> {
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
         }
-        return Err(format!(
-            "curl failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }
-    Err("need fetch(1) or curl to download catalog".into())
+    Err("need fetch(1) or curl".into())
 }
 
 fn timed_output(
@@ -339,7 +333,7 @@ fn timed_output(
                 let _ = child.wait();
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "command timed out",
+                    "timed out",
                 ));
             }
             None => std::thread::sleep(Duration::from_millis(20)),
