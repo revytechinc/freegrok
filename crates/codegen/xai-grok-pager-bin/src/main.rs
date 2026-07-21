@@ -1793,6 +1793,44 @@ async fn async_main() -> Result<()> {
                 xai_grok_shell::inspect::inspect(&cwd, json).await?;
                 return Ok(());
             }
+            Command::Doctor {
+                json,
+                quick,
+                strict,
+                online,
+                auth,
+                mcp,
+                sandbox_deep,
+                live,
+            } => {
+                // Surface the real binary version to doctor without coupling
+                // xai-grok-shell to the update crate.
+                // SAFETY: single-threaded CLI path before other threads start.
+                unsafe {
+                    std::env::set_var(
+                        "GROK_DOCTOR_VERSION_OVERRIDE",
+                        env!("VERSION_WITH_COMMIT"),
+                    );
+                    if let Some(ch) = xai_grok_update::channel_name() {
+                        std::env::set_var("GROK_CHANNEL", ch);
+                    }
+                }
+                let code = xai_grok_shell::doctor::run(xai_grok_shell::doctor::DoctorOptions {
+                    json,
+                    quick,
+                    strict,
+                    online,
+                    auth,
+                    mcp,
+                    sandbox_deep,
+                    live,
+                })
+                .await?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+                return Ok(());
+            }
             Command::Setup { json } => {
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();

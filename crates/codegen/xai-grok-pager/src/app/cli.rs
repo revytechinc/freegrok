@@ -15,6 +15,37 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Run product self-diagnostics (platform readiness)
+    ///
+    /// Default: unprivileged, offline — no network, model calls, or sudo.
+    /// FreeBSD: jail sandbox absence is a warning (unprivileged jail create is
+    /// impossible); missing system `rg` is critical.
+    Doctor {
+        /// Emit machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+        /// Critical subset only (faster).
+        #[arg(long)]
+        quick: bool,
+        /// Treat warnings as failures (exit 2).
+        #[arg(long)]
+        strict: bool,
+        /// Allow network probes (partial in early doctor).
+        #[arg(long)]
+        online: bool,
+        /// Use credentials / models probes (partial in early doctor).
+        #[arg(long)]
+        auth: bool,
+        /// Run MCP connectivity checks (use `grok mcp doctor` for full report).
+        #[arg(long)]
+        mcp: bool,
+        /// Attempt sandbox-deep checks (FreeBSD helper only; never prompts sudo).
+        #[arg(long)]
+        sandbox_deep: bool,
+        /// One live inference turn (not implemented yet).
+        #[arg(long)]
+        live: bool,
+    },
     /// Manage running leader processes
     Leader(LeaderMgmtArgs),
     /// Sign out and clear cached credentials

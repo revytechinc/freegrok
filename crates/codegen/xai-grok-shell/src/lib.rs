@@ -25,6 +25,7 @@ pub mod extensions;
 pub use xai_grok_workspace::foreign_sessions;
 pub mod heap_profile;
 pub use xai_grok_http as http;
+pub mod doctor;
 pub mod inspect;
 pub mod instrumentation;
 pub mod leader;
