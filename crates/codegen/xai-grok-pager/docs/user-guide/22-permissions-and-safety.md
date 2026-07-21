@@ -4,6 +4,8 @@ Grok can read files, search code, edit files, and run shell commands. The permis
 
 This guide explains how a tool call is authorized, how to configure permission rules from the CLI, native configuration, or Claude settings, and how to use `PreToolUse` hooks for allow lists that apply in every mode.
 
+For OS isolation profiles (including FreeBSD jail status and optional helper setup), see [Sandbox Mode](18-sandbox.md). For product self-checks, see [Diagnostics](25-doctor.md).
+
 ---
 
 ## How a Tool Call Is Authorized
