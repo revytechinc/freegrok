@@ -10,6 +10,7 @@ pub use self::conversation::*;
 pub use self::error::{ResponseModelMetadata, Result, SamplingError};
 pub use self::types::*;
 pub use xai_grok_sampler::ApiBackend;
+pub use xai_grok_sampler::AuthScheme;
 pub use xai_grok_sampler::SamplingClient as Client;
 
 // Re-export async-openai Responses API types under `rs` namespace

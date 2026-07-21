@@ -13295,6 +13295,8 @@ dependencies = [
 name = "xai-grok-models"
 version = "0.1.0"
 dependencies = [
+ "flate2",
+ "reqwest 0.12.24",
  "serde",
  "serde_json",
 ]

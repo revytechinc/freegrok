@@ -170,11 +170,28 @@ model = "claude-opus-4-6"
 base_url = "https://api.anthropic.com/v1"
 name = "Claude Opus 4.6"
 api_backend = "messages"
+auth_scheme = "x_api_key"                 # Anthropic-style header (preferred)
+env_key = "ANTHROPIC_API_KEY"
 context_window = 200000
-extra_headers = { "x-api-key" = "sk-ant-...", "anthropic-version" = "2023-06-01" }
+extra_headers = { "anthropic-version" = "2023-06-01" }
 ```
 
-The `messages` backend uses the Anthropic Messages protocol. Anthropic authenticates with an `x-api-key` header rather than `Authorization: Bearer`, so pass your key through `extra_headers`, which Grok sends verbatim.
+The `messages` backend uses the Anthropic Messages protocol. Prefer `auth_scheme = "x_api_key"` with `api_key` / `env_key` so Grok sends the key as `x-api-key`. You can still pass headers through `extra_headers` (sent verbatim) for version tags or legacy key injection.
+
+### MiniMax
+
+MiniMax exposes an Anthropic-compatible API (see [models.dev](https://models.dev)):
+
+```toml
+[model.minimax-m2]
+model = "MiniMax-M2.5"
+base_url = "https://api.minimax.io/anthropic/v1"
+name = "MiniMax M2.5"
+api_backend = "messages"
+auth_scheme = "x_api_key"
+env_key = "MINIMAX_API_KEY"
+context_window = 204800
+```
 
 ### OpenAI (Chat Completions)
 

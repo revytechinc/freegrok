@@ -63,7 +63,7 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 | FreeBSD versions | **14, 15, 16** (16 = CURRENT/dev) |
 | Phase 0–1b | Done (rg skip, jail stubs, compile fixes, matrix green on 15.1-STABLE) |
 | `nucleo` | Path-vendored `third_party/nucleo` (no git dep under ports SKIP_GIT) |
-| Binary / package | Ports intent: `devel/grok-build` → package `grok-build-native`, bin **`grok-build`**. Leave **misc/grok-build** (Linux brand) alone. FreeBSD ports = **manual submission** (do not auto-push ports trees) |
+| Binary / package | Ports intent: `devel/grok-build` → package `grok-build-native`, bin **`grok-build`**. Leave **misc/grok-build** (Linux brand) alone. FreeBSD ports = **manual submission** (do not auto-push ports trees). **Fork** of upstream Grok Build; ships a **native FreeBSD ELF** (not Linux/Linuxulator). **amd64 only** for now (`ONLY_FOR_ARCHS=amd64`) — no other arches claimed until built+tested. |
 | `grok doctor` | Landed. Offline default; **`--ci`** build gate (critical-only, ≤15s). Wired into `scripts/freebsd-regression.sh` + cargo test |
 | `grok jail` | Scaffold: `status` / `catalog` / `setup` (dry-run). Default scope **helper-only** (TUI). `--full` advanced. **No `--apply` yet** |
 | Jail helper | Phase 2: still to implement real create + re-exec |

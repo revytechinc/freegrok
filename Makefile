@@ -30,12 +30,15 @@ IPREFIX = $(PREFIX)
 
 BINDIR = $(IPREFIX)/bin
 DOCDIR = $(IPREFIX)/share/doc/grok-build
+SHAREDIR = $(IPREFIX)/share/grok-build
 BASHCOMPDIR = $(IPREFIX)/etc/bash_completion.d
 ZSHCOMPDIR = $(IPREFIX)/share/zsh/site-functions
 FISHCOMPDIR = $(IPREFIX)/share/fish/vendor_completions.d
+MODELS_DEV_GZ = crates/codegen/xai-grok-models/catalog/models_dev.json.gz
 
 .PHONY: all build release install uninstall doctor check clean help preflight \
-	require-build ensure-build _install_all _install_bin _install_completions _install_docs
+	require-build ensure-build _install_all _install_bin _install_completions \
+	_install_docs _install_catalog
 
 # Default goal: bare "make" builds the release binary.
 all: build
@@ -115,7 +118,7 @@ install: ensure-build require-build
 		$(MAKE) _install_all IPREFIX="$$userp" DESTDIR="" BINNAME="$(BINNAME)"; \
 	fi
 
-_install_all: require-build _install_bin _install_completions _install_docs
+_install_all: require-build _install_bin _install_completions _install_docs _install_catalog
 	@echo ""
 	@echo "Installed: $(DESTDIR)$(BINDIR)/$(BINNAME)"
 	@echo "Check:     $(BINNAME) doctor --ci"
@@ -151,6 +154,12 @@ _install_docs:
 		crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md \
 		"$(DESTDIR)$(DOCDIR)/sandbox.md" 2>/dev/null || true
 
+# Offline models.dev snapshot (also embedded in the binary).
+_install_catalog:
+	mkdir -p "$(DESTDIR)$(SHAREDIR)"
+	-install -m 644 "$(MODELS_DEV_GZ)" \
+		"$(DESTDIR)$(SHAREDIR)/models_dev.json.gz" 2>/dev/null || true
+
 # Uninstall from PREFIX (default /usr/local). If you fell back to ~/.local:
 #   make uninstall PREFIX=$$HOME/.local
 uninstall:
@@ -159,6 +168,8 @@ uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/share/zsh/site-functions/_$(BINNAME)"
 	rm -f "$(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/$(BINNAME).fish"
 	rm -rf "$(DESTDIR)$(PREFIX)/share/doc/grok-build"
+	rm -f "$(DESTDIR)$(PREFIX)/share/grok-build/models_dev.json.gz"
+	-rmdir "$(DESTDIR)$(PREFIX)/share/grok-build" 2>/dev/null || true
 
 clean:
 	$(CARGO) clean

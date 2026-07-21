@@ -1,10 +1,21 @@
-//! Default model IDs loaded from `default_models.json` at runtime.
-//! Edit that JSON file to change them.
+//! Default model IDs and the offline **models.dev** provider catalog.
 //!
-//! At runtime each model is resolved via:
-//!   CLI flag > ENV var > config.toml > remote settings > these defaults
+//! - `default_models.json` — baked first-party defaults (xAI / Grok).
+//! - `catalog/models_dev.json.gz` — shipped snapshot of https://models.dev
+//!   for multi-provider discovery; see [`catalog`].
 
 use std::sync::LazyLock;
+
+pub mod catalog;
+
+pub use catalog::{
+    catalog_model_key, default_base_url, default_user_cache_path, load_catalog,
+    load_catalog_from_path, load_shipped_catalog, map_npm_to_backend, parse_catalog_auto,
+    parse_catalog_json, provider_base_url, try_update_from_bytes, validate_catalog,
+    write_catalog_gz, CatalogApiBackend, CatalogAuthScheme, CatalogError, CatalogSource,
+    LoadedCatalog, ModelsDevCatalog, ModelsDevModel, ModelsDevProvider, INSTALL_CATALOG_REL,
+    MODELS_DEV_URL, SHIPPED_MODELS_DEV_GZ,
+};
 
 /// The raw JSON, embedded at compile time. Re-exported through the
 /// `xai_grok_shell::models` facade and consumed by `agent::config`, so it must
@@ -67,4 +78,14 @@ pub fn default_session_summary_model() -> &'static str {
         .session_summary
         .as_deref()
         .unwrap_or(&DEFAULTS.default)
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::*;
+
+    #[test]
+    fn default_model_present() {
+        assert!(!default_model().is_empty());
+    }
 }
