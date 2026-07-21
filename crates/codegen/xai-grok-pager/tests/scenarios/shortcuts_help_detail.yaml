@@ -44,13 +44,15 @@ steps:
     text: collapse
   - action: assert_not_contains
     text: panicked
-  # Move selection off the section header onto the CancelTurn hint
-  # (Essentials order: send, prompt, scrollback, cancel).
+  # Selection starts on first Essentials row (Send). Order: Send, Focus
+  # scrollback, Cancel turn, Cycle mode, … — two Downs → Cancel turn.
   - action: keys
-    keys: "<Down><Down><Down>"
+    keys: "<Down><Down>"
   - action: wait
     millis: 200
-  # Inline-expand (right arrow): the action's long_help renders under the row.
+  - action: assert_contains
+    text: Cancel turn
+  # Inline-expand (right arrow): CancelTurn long_help under the row.
   - action: keys
     keys: "<Right>"
   - action: wait_for_text

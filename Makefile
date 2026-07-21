@@ -54,7 +54,7 @@ help:
 	@echo "  make check      cargo check"
 	@echo "  make check-pii  best-effort PII/secret gate (staged/changed source)"
 	@echo "  make hooks-install  install git pre-commit → check-pii --staged"
-	@echo "  make tui-regression  isolated PTY TUI smoke (not operator HOME)"
+	@echo "  make tui-regression  isolated PTY TUI suite (TUI_TIER=smoke|standard|full)"
 	@echo "  make clean      cargo clean"
 	@echo ""
 	@echo "PREFIX=$(PREFIX)  BINNAME=$(BINNAME)  PROTOC=$(PROTOC)"
@@ -107,9 +107,11 @@ check-pii:
 hooks-install:
 	@sh scripts/git-hooks/install.sh
 
-# Isolated PTY smoke (temp HOME/GROK_HOME, mock inference, no operator keys).
+# Isolated PTY suite (temp HOME/GROK_HOME, mock inference, no operator keys).
+# TUI_TIER=smoke|standard|full  TUI_SCENARIO_FILES="a.yaml b.yaml"  TUI_FAIL_FAST=1
 tui-regression: ensure-build require-build
-	@PAGER_BINARY="$(CURDIR)/$(RELEASE_BIN)" sh scripts/tui-regression.sh
+	@PAGER_BINARY="$(CURDIR)/$(RELEASE_BIN)" TUI_TIER="$${TUI_TIER:-smoke}" \
+		sh scripts/tui-regression.sh
 
 doctor: ensure-build require-build
 	./$(RELEASE_BIN) doctor --ci
