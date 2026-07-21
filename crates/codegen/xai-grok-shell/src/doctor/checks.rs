@@ -2,7 +2,45 @@
 
 use super::{CheckResult, Severity, Status, timed};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Per-command stall budget (build must not hang on a wedged child).
+const CMD_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Run a command with a hard timeout; kills the child on expiry.
+fn output_timeout(mut cmd: Command, timeout: Duration) -> Result<std::process::Output, String> {
+    use std::io::Read;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                if let Some(mut out) = child.stdout.take() {
+                    let _ = out.read_to_end(&mut stdout);
+                }
+                if let Some(mut err) = child.stderr.take() {
+                    let _ = err.read_to_end(&mut stderr);
+                }
+                return Ok(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("timed out after {}ms", timeout.as_millis()));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(15)),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
 
 /// FreeBSD major floor: 14, 15, and 16 (CURRENT/dev).
 pub const MIN_FREEBSD_MAJOR: u32 = 14;
@@ -32,30 +70,27 @@ pub async fn run_default_tier(quick: bool) -> Vec<CheckResult> {
 
 pub fn binary_brand(exe: &str) -> String {
     // Prefer `file(1)` when available; fall back to OS compile target.
-    let output = Command::new("file")
-        .arg("-b")
-        .arg(exe)
-        .output()
-        .ok()
-        .filter(|o| o.status.success());
-    if let Some(out) = output {
-        let desc = String::from_utf8_lossy(&out.stdout).to_lowercase();
-        if desc.contains("freebsd") {
-            return "freebsd-elf".into();
-        }
-        if desc.contains("linux") || desc.contains("sysv") && desc.contains("static") {
-            // Static Linux pie often says "version 1 (SYSV)" without FreeBSD.
-            if !desc.contains("freebsd") {
-                return "linux-elf".into();
+    let mut cmd = Command::new("file");
+    cmd.arg("-b").arg(exe);
+    if let Ok(out) = output_timeout(cmd, CMD_TIMEOUT) {
+        if out.status.success() {
+            let desc = String::from_utf8_lossy(&out.stdout).to_lowercase();
+            if desc.contains("freebsd") {
+                return "freebsd-elf".into();
             }
+            if desc.contains("linux") || (desc.contains("sysv") && desc.contains("static")) {
+                if !desc.contains("freebsd") {
+                    return "linux-elf".into();
+                }
+            }
+            if desc.contains("mach-o") {
+                return "mach-o".into();
+            }
+            if desc.contains("pe32") || desc.contains("windows") {
+                return "windows-pe".into();
+            }
+            return format!("other:{}", desc.lines().next().unwrap_or("unknown").trim());
         }
-        if desc.contains("mach-o") {
-            return "mach-o".into();
-        }
-        if desc.contains("pe32") || desc.contains("windows") {
-            return "windows-pe".into();
-        }
-        return format!("other:{}", desc.lines().next().unwrap_or("unknown").trim());
     }
     format!("{}-unknown", std::env::consts::OS)
 }
@@ -63,12 +98,15 @@ pub fn binary_brand(exe: &str) -> String {
 pub fn os_release() -> String {
     #[cfg(target_os = "freebsd")]
     {
-        if let Ok(out) = Command::new("freebsd-version").output() {
+        let mut cmd = Command::new("freebsd-version");
+        if let Ok(out) = output_timeout(cmd, CMD_TIMEOUT) {
             if out.status.success() {
                 return String::from_utf8_lossy(&out.stdout).trim().to_string();
             }
         }
-        if let Ok(out) = Command::new("uname").arg("-r").output() {
+        let mut cmd = Command::new("uname");
+        cmd.arg("-r");
+        if let Ok(out) = output_timeout(cmd, CMD_TIMEOUT) {
             if out.status.success() {
                 return String::from_utf8_lossy(&out.stdout).trim().to_string();
             }
@@ -76,7 +114,9 @@ pub fn os_release() -> String {
     }
     #[cfg(not(target_os = "freebsd"))]
     {
-        if let Ok(out) = Command::new("uname").arg("-r").output() {
+        let mut cmd = Command::new("uname");
+        cmd.arg("-r");
+        if let Ok(out) = output_timeout(cmd, CMD_TIMEOUT) {
             if out.status.success() {
                 return String::from_utf8_lossy(&out.stdout).trim().to_string();
             }
@@ -224,18 +264,19 @@ fn check_rg() -> CheckResult {
     let which = which_bin("rg");
     match which {
         Some(path) => {
-            let ver = Command::new(&path)
-                .arg("--version")
-                .output()
-                .ok()
-                .and_then(|o| {
-                    if o.status.success() {
-                        Some(String::from_utf8_lossy(&o.stdout).lines().next()?.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "(rg present but --version failed)".into());
+            let mut cmd = Command::new(&path);
+            cmd.arg("--version");
+            let ver = match output_timeout(cmd, CMD_TIMEOUT) {
+                Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("rg")
+                    .to_string(),
+                Ok(_) => "(rg present but --version failed)".into(),
+                Err(e) => format!("(rg --version {e})"),
+            };
+            // Still pass if binary exists; version probe failure is detail only
+            // unless we got a hard timeout with no path usability.
             CheckResult {
                 id: "deps.rg".into(),
                 tier: "default".into(),
@@ -254,10 +295,7 @@ fn check_rg() -> CheckResult {
             severity: Severity::Critical,
             status: Status::Fail,
             summary: "ripgrep (rg) not found on PATH".into(),
-            detail: Some(
-                "FreeBSD builds do not bundle BurntSushi rg assets; system rg is required."
-                    .into(),
-            ),
+            detail: Some("System rg required (no FreeBSD rg bundle).".into()),
             fix: Some(rg_install_fix()),
             requires: vec![],
             duration_ms: 0,
@@ -570,10 +608,9 @@ fn check_shell_echo() -> CheckResult {
     } else {
         "sh"
     };
-    let output = Command::new(sh)
-        .args(["-c", "echo grok-doctor-ok"])
-        .output();
-    match output {
+    let mut cmd = Command::new(sh);
+    cmd.args(["-c", "echo grok-doctor-ok"]);
+    match output_timeout(cmd, CMD_TIMEOUT) {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
             if stdout.contains("grok-doctor-ok") {
@@ -608,7 +645,11 @@ fn check_shell_echo() -> CheckResult {
             severity: Severity::Critical,
             status: Status::Fail,
             summary: "Shell spawn failed".into(),
-            detail: Some(format!("status={} stderr={}", o.status, String::from_utf8_lossy(&o.stderr))),
+            detail: Some(format!(
+                "status={} stderr={}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr)
+            )),
             fix: Some("Ensure /bin/sh exists and is executable".into()),
             requires: vec![],
             duration_ms: 0,
@@ -619,7 +660,7 @@ fn check_shell_echo() -> CheckResult {
             severity: Severity::Critical,
             status: Status::Fail,
             summary: "Could not spawn shell".into(),
-            detail: Some(e.to_string()),
+            detail: Some(e),
             fix: Some("Ensure a POSIX shell is installed".into()),
             requires: vec![],
             duration_ms: 0,
@@ -684,11 +725,9 @@ fn check_git_optional() -> CheckResult {
             duration_ms: 0,
         };
     }
-    match Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(&cwd)
-        .output()
-    {
+    let mut cmd = Command::new("git");
+    cmd.args(["status", "--porcelain"]).current_dir(&cwd);
+    match output_timeout(cmd, CMD_TIMEOUT) {
         Ok(o) if o.status.success() => CheckResult {
             id: "git.optional".into(),
             tier: "default".into(),
@@ -716,9 +755,9 @@ fn check_git_optional() -> CheckResult {
             tier: "default".into(),
             severity: Severity::Warn,
             status: Status::Warn,
-            summary: "git not available".into(),
-            detail: Some(e.to_string()),
-            fix: Some("Install git for VCS features".into()),
+            summary: "git probe failed".into(),
+            detail: Some(e),
+            fix: None,
             requires: vec![],
             duration_ms: 0,
         },

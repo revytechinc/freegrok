@@ -20,8 +20,11 @@ pub struct DoctorOptions {
     pub json: bool,
     /// Critical subset only.
     pub quick: bool,
-    /// Warnings count as hard failures for exit code 2.
+    /// Warnings count as hard failures (exit 1).
     pub strict: bool,
+    /// Build/CI gate: offline, quick, ignore warnings; fail only on critical.
+    /// Disables online/auth/mcp/live/sandbox-deep. Bounded wall clock.
+    pub ci: bool,
     /// Allow network probes (not implemented in D1 beyond skip).
     pub online: bool,
     /// Use credentials / models (not implemented in D1 beyond skip).
@@ -32,6 +35,36 @@ pub struct DoctorOptions {
     pub sandbox_deep: bool,
     /// One live inference turn (not implemented in D1 beyond skip).
     pub live: bool,
+}
+
+impl DoctorOptions {
+    /// Options for cargo/ports build gates: fast, offline, critical-only exit.
+    pub fn for_ci() -> Self {
+        Self {
+            json: false,
+            quick: true,
+            strict: false,
+            ci: true,
+            online: false,
+            auth: false,
+            mcp: false,
+            sandbox_deep: false,
+            live: false,
+        }
+    }
+
+    fn normalize(mut self) -> Self {
+        if self.ci {
+            // Never stall the build on opt-in / network work.
+            self.quick = true;
+            self.online = false;
+            self.auth = false;
+            self.mcp = false;
+            self.sandbox_deep = false;
+            self.live = false;
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -130,20 +163,42 @@ impl DoctorSummary {
     }
 }
 
-fn exit_code_for(summary: &DoctorSummary, strict: bool) -> i32 {
+/// CI/build wall-clock budget for the whole doctor run (stall guard).
+pub const CI_WALL_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+
+fn exit_code_for(summary: &DoctorSummary, strict: bool, ci: bool) -> i32 {
     if summary.fail > 0 {
         return 2;
     }
-    if summary.warn > 0 || (strict && summary.warn > 0) {
-        return 1;
+    // Build gate: warnings (e.g. missing jail helper) must not fail the package.
+    if ci {
+        return 0;
+    }
+    if summary.warn > 0 {
+        return if strict { 2 } else { 1 };
     }
     0
 }
 
 /// Run product diagnostics and print the report. Returns the process exit code.
 pub async fn run(opts: DoctorOptions) -> anyhow::Result<i32> {
-    let report = collect_report(opts).await?;
-    if opts.json {
+    let opts = opts.normalize();
+    let json = opts.json;
+    let report = if opts.ci {
+        match tokio::time::timeout(CI_WALL_BUDGET, collect_report(opts)).await {
+            Ok(r) => r?,
+            Err(_) => {
+                eprintln!(
+                    "doctor --ci exceeded {}s wall budget (stalled)",
+                    CI_WALL_BUDGET.as_secs()
+                );
+                return Ok(2);
+            }
+        }
+    } else {
+        collect_report(opts).await?
+    };
+    if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         print_human(&report);
@@ -153,6 +208,7 @@ pub async fn run(opts: DoctorOptions) -> anyhow::Result<i32> {
 
 /// Collect the full report without printing (testable).
 pub async fn collect_report(opts: DoctorOptions) -> anyhow::Result<DoctorReport> {
+    let opts = opts.normalize();
     // Pager-bin may pass a richer string via env; otherwise package version.
     let version = std::env::var("GROK_DOCTOR_VERSION_OVERRIDE").unwrap_or_else(|_| {
         format!("{} (shell)", env!("CARGO_PKG_VERSION"))
@@ -167,7 +223,7 @@ pub async fn collect_report(opts: DoctorOptions) -> anyhow::Result<DoctorReport>
     let mut checks = Vec::new();
     checks.extend(checks::run_default_tier(opts.quick).await);
 
-    // Opt-in tiers not fully implemented yet: explicit skips so flags are honest.
+    // Opt-in tiers — never in --ci (normalize already clears flags).
     if opts.online {
         checks.push(skipped(
             "net.online",
@@ -209,7 +265,7 @@ pub async fn collect_report(opts: DoctorOptions) -> anyhow::Result<DoctorReport>
     }
 
     let summary = DoctorSummary::from_checks(&checks);
-    let exit_code = exit_code_for(&summary, opts.strict);
+    let exit_code = exit_code_for(&summary, opts.strict, opts.ci);
 
     Ok(DoctorReport {
         grok_version: version,
@@ -335,11 +391,12 @@ mod tests {
             skip: 0,
             info: 0,
         };
-        assert_eq!(exit_code_for(&s, false), 2);
+        assert_eq!(exit_code_for(&s, false, false), 2);
+        assert_eq!(exit_code_for(&s, false, true), 2);
     }
 
     #[test]
-    fn exit_code_warn_is_1() {
+    fn exit_code_warn_is_1_unless_ci() {
         let s = DoctorSummary {
             pass: 1,
             warn: 1,
@@ -347,7 +404,8 @@ mod tests {
             skip: 0,
             info: 0,
         };
-        assert_eq!(exit_code_for(&s, false), 1);
+        assert_eq!(exit_code_for(&s, false, false), 1);
+        assert_eq!(exit_code_for(&s, false, true), 0);
     }
 
     #[test]
@@ -359,7 +417,8 @@ mod tests {
             skip: 1,
             info: 1,
         };
-        assert_eq!(exit_code_for(&s, false), 0);
+        assert_eq!(exit_code_for(&s, false, false), 0);
+        assert_eq!(exit_code_for(&s, false, true), 0);
     }
 
     #[tokio::test]
@@ -372,6 +431,25 @@ mod tests {
         .expect("doctor report");
         assert!(!report.checks.is_empty());
         assert!(!report.binary.brand.is_empty());
+    }
+
+    /// Build gate: doctor --ci must not report critical failures on a healthy host.
+    #[tokio::test]
+    async fn doctor_ci_gate_no_critical_failures() {
+        let report = collect_report(DoctorOptions::for_ci())
+            .await
+            .expect("doctor ci report");
+        assert_eq!(
+            report.summary.fail, 0,
+            "critical doctor failures in CI: {:?}",
+            report
+                .checks
+                .iter()
+                .filter(|c| c.status == Status::Fail)
+                .map(|c| &c.id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(report.exit_code, 0);
     }
 
     #[test]

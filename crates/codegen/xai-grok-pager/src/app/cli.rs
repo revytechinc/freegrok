@@ -27,9 +27,13 @@ pub enum Command {
         /// Critical subset only (faster).
         #[arg(long)]
         quick: bool,
-        /// Treat warnings as failures (exit 2).
+        /// Treat warnings as failures (exit 1 or 2 with --strict).
         #[arg(long)]
         strict: bool,
+        /// Build/CI gate: offline + quick; fail only on critical; 15s wall budget.
+        /// Use this in ports `do-test` and FreeBSD regression (does not stall).
+        #[arg(long)]
+        ci: bool,
         /// Allow network probes (partial in early doctor).
         #[arg(long)]
         online: bool,

@@ -134,6 +134,22 @@ else
   tail -60 "$LOG" >>"$SUMMARY"
 fi
 
+# Product doctor CI gate (offline, critical-only, 15s wall budget — no stall)
+echo "==== DOCTOR --ci $(ts) ====" | tee -a "$LOG"
+if [ -x target/release/xai-grok-pager ]; then
+  if target/release/xai-grok-pager doctor --ci --json >>"$LOG" 2>&1; then
+    echo "PASS doctor --ci" | tee -a "$SUMMARY"
+    pass=$((pass + 1))
+  else
+    echo "FAIL doctor --ci" | tee -a "$SUMMARY"
+    fail=$((fail + 1))
+    tail -40 "$LOG" >>"$SUMMARY"
+  fi
+else
+  echo "FAIL doctor --ci (no release binary)" | tee -a "$SUMMARY"
+  fail=$((fail + 1))
+fi
+
 # Sandbox smoke example (no kernel nono on FreeBSD; should not crash)
 echo "==== EXAMPLE sandbox_smoke_test $(ts) ====" | tee -a "$LOG"
 if cargo run -p xai-grok-sandbox --example sandbox_smoke_test -- workspace >>"$LOG" 2>&1; then

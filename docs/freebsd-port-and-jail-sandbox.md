@@ -24,6 +24,16 @@
 
 **14, 15, and 16** (16 = CURRENT/dev). Ports: `OSVERSION >= 1400000`.
 
+### Doctor CI gate (build)
+
+```sh
+# Must pass in regression + ports do-test (offline, critical-only, ≤15s):
+target/release/xai-grok-pager doctor --ci
+# cargo: doctor::tests::doctor_ci_gate_no_critical_failures
+```
+
+`--ci` ignores warnings (e.g. jail helper), fails only on critical. No network/auth.
+
 ---
 
 ## Context
