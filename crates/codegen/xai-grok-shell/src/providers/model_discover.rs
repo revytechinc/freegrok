@@ -945,23 +945,50 @@ fn collect_model_strings_in_json(v: &serde_json::Value) -> Vec<String> {
 
 fn looks_like_model_id(s: &str) -> bool {
     let s = s.trim();
-    if s.len() < 3 || s.len() > 120 {
+    if s.len() < 5 || s.len() > 96 {
         return false;
     }
-    if s.contains(' ') && !s.contains('/') {
+    // Reject paths, URLs, and shell noise from chat history scrapes.
+    if s.starts_with('/') || s.starts_with('.') || s.contains("://") || s.contains("..") {
         return false;
     }
+    if s.contains(' ') {
+        return false;
+    }
+    // Must look like a product model slug, not a random path segment.
     let lower = s.to_ascii_lowercase();
-    lower.contains("gpt")
-        || lower.contains("claude")
-        || lower.contains("gemini")
-        || lower.contains("grok")
-        || lower.contains("llama")
-        || lower.contains("mistral")
-        || lower.contains("deepseek")
-        || lower.contains("qwen")
-        || lower.contains("oss")
+    let has_vendor_prefix = lower.starts_with("gpt")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+        || lower.starts_with("claude")
+        || lower.starts_with("gemini")
+        || lower.starts_with("gemma")
+        || lower.starts_with("grok")
+        || lower.starts_with("llama")
+        || lower.starts_with("mistral")
+        || lower.starts_with("codestral")
+        || lower.starts_with("deepseek")
+        || lower.starts_with("qwen")
+        || lower.starts_with("minimax")
+        || lower.starts_with("chatgpt")
+        || lower.starts_with("gpt-oss")
+        || lower.starts_with("openai/")
+        || lower.starts_with("anthropic/")
+        || lower.starts_with("google/")
+        || lower.starts_with("meta-llama/")
+        || lower.starts_with("x-ai/")
+        || lower.contains("gpt-oss");
+    if !has_vendor_prefix {
+        return false;
+    }
+    // Prefer ids with a digit or known separator (filters bare words like "logout").
+    let has_structure = s.chars().any(|c| c.is_ascii_digit())
+        || s.contains('-')
+        || s.contains('.')
         || s.contains('/')
+        || s.contains('@');
+    has_structure
 }
 
 fn scrape_model_ids_from_text(text: &str) -> Vec<String> {
@@ -971,13 +998,13 @@ fn scrape_model_ids_from_text(text: &str) -> Vec<String> {
         if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | '@') {
             cur.push(ch);
         } else if !cur.is_empty() {
-            if looks_like_model_id(&cur) && cur.len() > 5 {
+            if looks_like_model_id(&cur) {
                 out.push(cur.clone());
             }
             cur.clear();
         }
     }
-    if looks_like_model_id(&cur) && cur.len() > 5 {
+    if looks_like_model_id(&cur) {
         out.push(cur);
     }
     let mut seen = std::collections::BTreeSet::new();
@@ -1232,5 +1259,20 @@ GPT-OSS 120B (Medium)
                 "missing recent for {p}"
             );
         }
+    }
+
+    #[test]
+    fn history_scrape_rejects_urls_and_paths() {
+        let junk = r#"
+            check //wallhaven.cc/user/foo and /home/mlapointe/git/wf-shell
+            and Be/Haiku plus logout/poweroff then gemini-3.5-flash-medium
+            and claude-sonnet-4.6-thinking and gpt-oss-120b-medium
+        "#;
+        let ids = scrape_model_ids_from_text(junk);
+        assert!(ids.iter().all(|i| !i.contains("wallhaven")));
+        assert!(ids.iter().all(|i| !i.starts_with('/')));
+        assert!(ids.iter().any(|i| i.contains("gemini-3.5")));
+        assert!(ids.iter().any(|i| i.contains("claude")));
+        assert!(ids.iter().any(|i| i.contains("gpt-oss")));
     }
 }
