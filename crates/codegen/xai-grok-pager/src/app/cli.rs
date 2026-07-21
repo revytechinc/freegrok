@@ -85,6 +85,8 @@ pub enum Command {
     Memory(crate::memory_cmd::MemoryArgs),
     /// List available models and exit
     Models,
+    /// Discover local LLM installs and validate provider endpoints
+    Providers(crate::providers_cmd::ProvidersArgs),
     /// List, search, or restore sessions
     Sessions(crate::sessions_cmd::SessionsArgs),
     /// Fetch and install managed configuration

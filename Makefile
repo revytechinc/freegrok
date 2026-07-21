@@ -153,6 +153,9 @@ _install_docs:
 	-install -m 644 \
 		crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md \
 		"$(DESTDIR)$(DOCDIR)/sandbox.md" 2>/dev/null || true
+	-install -m 644 \
+		crates/codegen/xai-grok-pager/docs/user-guide/26-providers.md \
+		"$(DESTDIR)$(DOCDIR)/providers.md" 2>/dev/null || true
 
 # Offline models.dev snapshot (also embedded in the binary).
 _install_catalog:

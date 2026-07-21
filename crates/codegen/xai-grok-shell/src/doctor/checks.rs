@@ -58,6 +58,8 @@ pub async fn run_default_tier(quick: bool) -> Vec<CheckResult> {
     out.push(timed(check_sandbox_backend));
     out.push(timed(check_sandbox_jail_status));
     out.push(timed(check_shell_echo));
+    out.push(timed(check_models_dev_catalog));
+    out.push(timed(check_provider_discovery));
 
     if !quick {
         out.push(timed(check_cwd_readable));
@@ -66,6 +68,75 @@ pub async fn run_default_tier(quick: bool) -> Vec<CheckResult> {
     }
 
     out
+}
+
+fn check_models_dev_catalog() -> CheckResult {
+    match xai_grok_models::load_catalog() {
+        Ok(loaded) => CheckResult {
+            id: "models.catalog".into(),
+            tier: "default".into(),
+            severity: Severity::Info,
+            status: Status::Pass,
+            summary: "models.dev catalog loadable".into(),
+            detail: Some(format!(
+                "source={:?} providers={} models={}",
+                loaded.source, loaded.provider_count, loaded.model_count
+            )),
+            fix: None,
+            requires: vec![],
+            duration_ms: 0,
+        },
+        Err(e) => CheckResult {
+            id: "models.catalog".into(),
+            tier: "default".into(),
+            severity: Severity::Warn,
+            status: Status::Warn,
+            summary: "models.dev catalog failed to load".into(),
+            detail: Some(e.to_string()),
+            fix: Some("Reinstall package or refresh catalog snapshot".into()),
+            requires: vec![],
+            duration_ms: 0,
+        },
+    }
+}
+
+fn check_provider_discovery() -> CheckResult {
+    use crate::providers::discover::{discover_installed, DiscoverOptions};
+    use std::time::Duration;
+    let report = discover_installed(&DiscoverOptions {
+        tcp_timeout: Duration::from_millis(100),
+        ..Default::default()
+    });
+    let reachable_local = report
+        .items
+        .iter()
+        .filter(|i| {
+            matches!(i.kind, crate::providers::discover::FoundKind::LocalServer) && i.reachable
+        })
+        .count();
+    let env_keys = report
+        .items
+        .iter()
+        .filter(|i| {
+            matches!(i.kind, crate::providers::discover::FoundKind::EnvCredential)
+        })
+        .count();
+    CheckResult {
+        id: "providers.discovery".into(),
+        tier: "default".into(),
+        severity: Severity::Info,
+        status: Status::Pass,
+        summary: "Provider discovery (local / env)".into(),
+        detail: Some(format!(
+            "items={} local_reachable={} env_keys={}",
+            report.items.len(),
+            reachable_local,
+            env_keys
+        )),
+        fix: None,
+        requires: vec![],
+        duration_ms: 0,
+    }
 }
 
 pub fn binary_brand(exe: &str) -> String {
