@@ -18,6 +18,9 @@
 PREFIX ?= /usr/local
 DESTDIR ?=
 BINNAME ?= grok-build
+# Second full binary (not a symlink) so pkill/killall on $(BINNAME) does not
+# take down a long-lived agent session started as $(STATIC_BINNAME).
+STATIC_BINNAME ?= grok-build-static
 
 CARGO ?= cargo
 CARGO_BIN_PKG = xai-grok-pager-bin
@@ -49,7 +52,7 @@ help:
 	@echo "  make            release binary (default; same as make build)"
 	@echo "  make build      release binary (cargo, incremental)"
 	@echo "  make doctor     offline gate: doctor --ci (builds if binary missing)"
-	@echo "  make install    install $(BINNAME) (builds if needed; PREFIX=$(PREFIX); falls back to ~/\.local)"
+	@echo "  make install    install $(BINNAME) + $(STATIC_BINNAME) (full second copy)"
 	@echo "  make uninstall  remove from PREFIX (or set PREFIX=$$HOME/.local)"
 	@echo "  make check      cargo check"
 	@echo "  make check-pii  best-effort PII/secret gate (staged/changed source)"
@@ -57,7 +60,9 @@ help:
 	@echo "  make tui-regression  isolated PTY TUI suite (TUI_TIER=smoke|standard|full)"
 	@echo "  make clean      cargo clean"
 	@echo ""
-	@echo "PREFIX=$(PREFIX)  BINNAME=$(BINNAME)  PROTOC=$(PROTOC)"
+	@echo "PREFIX=$(PREFIX)  BINNAME=$(BINNAME)  STATIC_BINNAME=$(STATIC_BINNAME)  PROTOC=$(PROTOC)"
+	@echo "  $(STATIC_BINNAME) is a separate installed file (same bytes as $(BINNAME)),"
+	@echo "  not a symlink — use it for live sessions while regression kills $(BINNAME)."
 	@echo "Deps: pkg install rust protobuf ripgrep"
 	@echo "Example: make && make install  # build, then install"
 	@echo "PII gate is best-effort (operator identity + high-confidence secrets);"
@@ -140,13 +145,24 @@ install: ensure-build require-build
 _install_all: require-build _install_bin _install_completions _install_docs _install_catalog
 	@echo ""
 	@echo "Installed: $(DESTDIR)$(BINDIR)/$(BINNAME)"
+	@echo "           $(DESTDIR)$(BINDIR)/$(STATIC_BINNAME)  (separate file, not a symlink)"
 	@echo "Check:     $(BINNAME) doctor --ci"
+	@echo "Session:   $(STATIC_BINNAME)   # survive pkill/killall $(BINNAME)"
 	@echo "Optional:  $(BINNAME) jail status"
 	@echo "PATH:      ensure $(BINDIR) is on PATH"
 
 _install_bin: require-build
 	mkdir -p "$(DESTDIR)$(BINDIR)"
+	# Two real installs: same payload, different paths/names. A symlink or hard
+	# link is not enough when tools match by basename or kill by name pattern.
 	install -m 755 "$(RELEASE_BIN)" "$(DESTDIR)$(BINDIR)/$(BINNAME)"
+	install -m 755 "$(RELEASE_BIN)" "$(DESTDIR)$(BINDIR)/$(STATIC_BINNAME)"
+	@# Prove they are distinct inodes (not a link).
+	@if [ "$$(stat -f '%i' "$(DESTDIR)$(BINDIR)/$(BINNAME)" 2>/dev/null || stat -c '%i' "$(DESTDIR)$(BINDIR)/$(BINNAME)")" = \
+		"$$(stat -f '%i' "$(DESTDIR)$(BINDIR)/$(STATIC_BINNAME)" 2>/dev/null || stat -c '%i' "$(DESTDIR)$(BINDIR)/$(STATIC_BINNAME)")" ]; then \
+		echo "error: $(STATIC_BINNAME) and $(BINNAME) share an inode — must be separate files"; \
+		exit 1; \
+	fi
 
 _install_completions: require-build
 	mkdir -p "$(DESTDIR)$(BASHCOMPDIR)" "$(DESTDIR)$(ZSHCOMPDIR)" "$(DESTDIR)$(FISHCOMPDIR)"
@@ -186,6 +202,7 @@ _install_catalog:
 #   make uninstall PREFIX=$$HOME/.local
 uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/bin/$(BINNAME)"
+	rm -f "$(DESTDIR)$(PREFIX)/bin/$(STATIC_BINNAME)"
 	rm -f "$(DESTDIR)$(PREFIX)/etc/bash_completion.d/$(BINNAME)"
 	rm -f "$(DESTDIR)$(PREFIX)/share/zsh/site-functions/_$(BINNAME)"
 	rm -f "$(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/$(BINNAME).fish"

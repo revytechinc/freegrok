@@ -1958,8 +1958,12 @@ pub(crate) async fn run(
             // biased order so a SIGTERM quit isn't starved by an ACP firehose.
             _ = quit_notify.notified() => {
                 let effs = dispatch::dispatch(Action::Quit, &mut app);
-                let _ = process_effects(effs, &mut tasks, &mut app, &progress_tx);
-                break;
+                // Staged quit may only schedule MCP prepare_exit; break only
+                // when Effect::Quit actually runs (process_effects returns true).
+                if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
+                    break;
+                }
+                presenter.request(false);
             }
 
             writer_event = writer_event_rx.recv() => {

@@ -2,10 +2,10 @@
 
 pub use xai_grok_mcp::servers::{
     AcpServerEntry, HttpConfig, MCP_TOOL_NAME_DELIMITER, McpClient, McpClientTimeoutOverrides,
-    McpConfigDiff, McpError, McpInitStrategy, McpMetaConfigMap, McpServerMetaConfig, McpServerName,
-    McpService, McpState, McpTool, McpToolRegistration, OauthInteractivity, SharedMcpPool,
-    mcp_server_name, mcp_target_str, mcp_transport_str, parse_mcp_meta_config, parse_mcp_tool_name,
-    sanitize_descriptor_segment, validate_tool_name,
+    McpConfigDiff, McpError, McpExitProgressReport, McpInitStrategy, McpMetaConfigMap,
+    McpServerMetaConfig, McpServerName, McpService, McpState, McpTool, McpToolRegistration,
+    OauthInteractivity, SharedMcpPool, mcp_server_name, mcp_target_str, mcp_transport_str,
+    parse_mcp_meta_config, parse_mcp_tool_name, sanitize_descriptor_segment, validate_tool_name,
 };
 
 use std::collections::HashMap;

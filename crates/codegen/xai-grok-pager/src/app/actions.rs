@@ -103,13 +103,42 @@ pub enum Action {
     },
     /// Open the "New Worktree" popup dialog on the welcome screen.
     OpenNewWorktreeDialog,
-    /// Open the interactive import-claude modal on the welcome screen.
+    /// Open the multi-source import menu (`/import-menu`, welcome Ctrl+I).
+    OpenImportMenu,
+    /// User picked a source in the import menu.
+    ImportMenuSelect(crate::views::import_menu_modal::ImportSource),
+    /// User cancelled the import source menu.
+    ImportMenuCancel,
+    /// Close the import discovery/apply report modal.
+    ImportReportClose,
+    /// Show a multi-line import report in the scrollable modal (not scrollback).
+    ShowImportReport {
+        title: String,
+        body: String,
+    },
+    /// Open the SSH import form (host, user, identity).
+    OpenSshImportForm,
+    /// Cancel the SSH import form.
+    SshImportFormCancel,
+    /// Submit SSH form → show connection/identity summary report (phase 1).
+    SshImportFormSubmit(crate::views::ssh_import_form_modal::SshImportFormValues),
+    /// Open path browser for SSH identity file.
+    SshImportBrowseIdentity,
+    /// Path browser cancelled (return to prior form if any).
+    PathBrowserCancel,
+    /// Path browser selected a file (purpose-specific handling in dispatch).
+    PathBrowserSelected {
+        purpose: crate::views::path_browser_modal::PathBrowserPurpose,
+        path: std::path::PathBuf,
+    },
+    /// Open the interactive Claude settings checklist (after scan).
+    /// Prefer [`Action::OpenImportMenu`] for user-facing entry points.
     ImportClaudeSettings,
-    /// User confirmed the import modal — apply selected items.
+    /// User confirmed the Claude checklist — apply selected items.
     ImportClaudeConfirm,
-    /// User cancelled the import modal — close without applying.
+    /// User cancelled the Claude checklist without applying.
     ImportClaudeCancel,
-    /// Hide the import-claude menu row by recording the current `.claude/`
+    /// Hide the import menu row by recording the current `.claude/`
     /// content hash as "seen". Doesn't import anything, doesn't change
     /// runtime fallback behavior. The menu reappears only if `.claude/`
     /// content changes.
@@ -1922,6 +1951,33 @@ pub enum Effect {
     },
     /// Unregister a session from the active-sessions registry (clean exit).
     UnregisterActiveSession { session_id: acp::SessionId },
+    /// Ownership-aware MCP teardown before process exit.
+    ///
+    /// Calls `x.ai/mcp/prepare_exit` per live session (with timeout), while
+    /// the TUI still shows `Closing MCP connections (N/X)…`. Completes as
+    /// [`TaskResult::McpExitReady`], which then fires [`Effect::Quit`].
+    PrepareMcpExit {
+        /// ACP session ids to tear down; empty skips the RPC and finishes.
+        session_ids: Vec<String>,
+    },
+    /// Scan Claude settings for the import modal off the UI thread.
+    ///
+    /// `scan_importable_settings` walks `.claude/` trees and config files; doing
+    /// that on the dispatch thread freezes the TUI. Completes as
+    /// [`TaskResult::ClaudeImportScanned`].
+    ScanClaudeImport {
+        cwd: std::path::PathBuf,
+    },
+    /// Apply a filtered Claude import plan off the UI thread.
+    ///
+    /// Writes config/hooks under `~/.grok` and the project root. Completes as
+    /// [`TaskResult::ClaudeImportApplied`].
+    ApplyClaudeImport {
+        plan: xai_grok_shell::claude_import::ImportPlan,
+        cwd: std::path::PathBuf,
+        /// Total items shown in the modal (for "Imported N of M" summary).
+        total_in_modal: usize,
+    },
     /// Quit the application.
     Quit,
     /// Toggle coding data sharing via ACP.
@@ -2582,6 +2638,22 @@ pub enum TaskResult {
     },
     /// Shell acknowledged logout (auth cleared).
     LogoutComplete,
+    /// MCP prepare_exit finished (or timed out); safe to leave the TUI.
+    McpExitReady,
+    /// Background Claude settings scan finished ([`Effect::ScanClaudeImport`]).
+    ClaudeImportScanned {
+        plan: xai_grok_shell::claude_import::ImportPlan,
+        cwd: std::path::PathBuf,
+    },
+    /// Background Claude import apply finished ([`Effect::ApplyClaudeImport`]).
+    ClaudeImportApplied {
+        /// Human-readable summary for the startup warning / toast.
+        summary: String,
+        /// When set, apply failed and `summary` is unused for the success path.
+        error: Option<String>,
+        /// Cwd used for import-state markers (project scope).
+        cwd: std::path::PathBuf,
+    },
     /// Best-effort `x.ai/auth/cancel` finished (no UI update; state already left Authenticating).
     AuthCancelComplete,
     /// Shell responded to `x.ai/auth/check_subscription`. `verify` echoes

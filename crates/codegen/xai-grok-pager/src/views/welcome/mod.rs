@@ -1748,7 +1748,7 @@ fn render_welcome_done(
             // 3 cells of this row as dismiss instead of open. Keyboard:
             // ctrl-shift-i. The key string is right-aligned by render_menu,
             // so [x] sits at the very end of the row.
-            items.push((key_i_with_x, "Import Claude settings"));
+            items.push((key_i_with_x, "Import settings"));
         }
         items.push((key_w, "New worktree"));
         items.push((key_s, "Resume session"));

@@ -317,6 +317,27 @@ pub fn mcp_status_line(
     ]))
 }
 
+/// Exit teardown chip: `⠋ Closing MCP connections (1/3)…`.
+///
+/// Prefer this over init chip while quit is in progress so the user sees
+/// intentional teardown instead of a frozen UI.
+pub fn mcp_exit_status_line(
+    progress: &crate::app::agent_view::McpExitProgress,
+    tick: u64,
+    theme: &Theme,
+) -> Option<Line<'static>> {
+    if !progress.is_visible() {
+        return None;
+    }
+    let frames = crate::glyphs::braille_spinner_frames();
+    let frame_idx = (tick / SPINNER_DIVISOR) as usize % frames.len();
+    let style = Style::default().fg(theme.gray_dim).bg(theme.bg_base);
+    Some(Line::from(vec![
+        Span::styled(format!("{} ", frames[frame_idx]), style),
+        Span::styled(progress.status_label(), style),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

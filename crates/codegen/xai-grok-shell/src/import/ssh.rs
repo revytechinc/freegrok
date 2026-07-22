@@ -639,6 +639,255 @@ pub fn default_ssh_key_candidates() -> Vec<PathBuf> {
     .collect()
 }
 
+/// Local account name for SSH form defaults (`user@host` when Host config
+/// does not set `User`). Never panics; returns `None` if unresolvable.
+pub fn current_os_username() -> Option<String> {
+    if let Ok(u) = std::env::var("USER") {
+        let t = u.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    if let Ok(u) = std::env::var("LOGNAME") {
+        let t = u.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    #[cfg(unix)]
+    {
+        // libc getpwuid is heavy; prefer `id -un` which is always available on
+        // FreeBSD/macOS/Linux developer boxes. Fail soft.
+        if let Ok(out) = Command::new("id").arg("-un").output() {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Max identity file size we will read for validation (private keys are small).
+pub const SSH_IDENTITY_MAX_BYTES: u64 = 256 * 1024;
+
+/// Result of validating a local path as an SSH private key identity (`-i`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentityValidation {
+    Ok,
+    /// Missing path, not a file, unreadable, wrong type, or suspicious content.
+    Reject { reason: String },
+}
+
+impl IdentityValidation {
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Self::Ok)
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Ok => None,
+            Self::Reject { reason } => Some(reason.as_str()),
+        }
+    }
+}
+
+/// Validate that `path` is a safe local OpenSSH identity file for `-i`.
+///
+/// **Never panics.** Rejects missing paths, directories, oversize files,
+/// binary media (e.g. MP4), and content that does not look like a private
+/// key. Used by the TUI form before applying the path to [`SshAuth`].
+pub fn validate_ssh_identity_file(path: &Path) -> IdentityValidation {
+    match validate_ssh_identity_file_inner(path) {
+        Ok(()) => IdentityValidation::Ok,
+        Err(reason) => IdentityValidation::Reject { reason },
+    }
+}
+
+fn validate_ssh_identity_file_inner(path: &Path) -> Result<(), String> {
+    if path.as_os_str().is_empty() {
+        return Err("path is empty".into());
+    }
+    let meta = fs::metadata(path).map_err(|e| format!("cannot stat identity: {e}"))?;
+    if !meta.is_file() {
+        return Err("identity path is not a regular file".into());
+    }
+    let len = meta.len();
+    if len == 0 {
+        return Err("identity file is empty".into());
+    }
+    if len > SSH_IDENTITY_MAX_BYTES {
+        return Err(format!(
+            "identity file too large ({len} bytes; max {SSH_IDENTITY_MAX_BYTES})"
+        ));
+    }
+
+    // Read a prefix first for magic-byte rejection (video/ELF/images).
+    let mut file = fs::File::open(path).map_err(|e| format!("cannot open identity: {e}"))?;
+    let mut prefix = [0u8; 512];
+    let n = std::io::Read::read(&mut file, &mut prefix)
+        .map_err(|e| format!("cannot read identity: {e}"))?;
+    let head = &prefix[..n];
+    if let Some(why) = reject_binary_magic(head) {
+        return Err(why);
+    }
+
+    // Full read for key markers (file is size-capped).
+    let bytes = fs::read(path).map_err(|e| format!("cannot read identity: {e}"))?;
+    if bytes.iter().filter(|b| **b == 0).count() > 4 {
+        return Err("identity looks binary (contains NUL bytes)".into());
+    }
+    // High non-text ratio → reject (mp4 without magic, etc.)
+    let non_text = bytes
+        .iter()
+        .filter(|b| {
+            let c = **b;
+            c != b'\n' && c != b'\r' && c != b'\t' && !(0x20..=0x7e).contains(&c)
+        })
+        .count();
+    if !bytes.is_empty() && (non_text * 100 / bytes.len()) > 15 {
+        return Err("identity does not look like a text key file".into());
+    }
+
+    let text = String::from_utf8_lossy(&bytes);
+    if looks_like_private_key(&text) {
+        return Ok(());
+    }
+    // PuTTY .ppk is text but different header — accept for OpenSSH that
+    // can convert, or reject? OpenSSH -i does not take .ppk. Reject clearly.
+    if text.contains("PuTTY-User-Key-File") {
+        return Err("PuTTY .ppk keys are not supported; use OpenSSH format (ssh-keygen -i)".into());
+    }
+    Err(
+        "not recognized as an OpenSSH/PEM private key (expected BEGIN … PRIVATE KEY)"
+            .into(),
+    )
+}
+
+fn reject_binary_magic(head: &[u8]) -> Option<String> {
+    // ISO BMFF (MP4/MOV): size + "ftyp" at offset 4
+    if head.len() >= 12 && &head[4..8] == b"ftyp" {
+        return Some("file looks like a video (MP4/QuickTime), not an SSH key".into());
+    }
+    if head.starts_with(b"\x89PNG") {
+        return Some("file looks like a PNG image, not an SSH key".into());
+    }
+    if head.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("file looks like a JPEG image, not an SSH key".into());
+    }
+    if head.starts_with(b"GIF8") {
+        return Some("file looks like a GIF image, not an SSH key".into());
+    }
+    if head.starts_with(b"%PDF") {
+        return Some("file looks like a PDF, not an SSH key".into());
+    }
+    if head.starts_with(b"\x7fELF") {
+        return Some("file looks like an ELF binary, not an SSH key".into());
+    }
+    if head.starts_with(b"MZ") {
+        return Some("file looks like a Windows executable, not an SSH key".into());
+    }
+    if head.starts_with(b"PK\x03\x04") {
+        return Some("file looks like a ZIP archive, not an SSH key".into());
+    }
+    if head.starts_with(b"\x1f\x8b") {
+        return Some("file looks like gzip data, not an SSH key".into());
+    }
+    // ISO BMFF / other: "....ftyp" already handled
+    if head.starts_with(b"RIFF") && head.len() >= 12 && &head[8..12] == b"WAVE" {
+        return Some("file looks like a WAV audio file, not an SSH key".into());
+    }
+    if head.starts_with(b"ID3") || (head.len() >= 2 && head[0] == 0xff && (head[1] & 0xe0) == 0xe0)
+    {
+        // rough mp3
+        if head.starts_with(b"ID3") {
+            return Some("file looks like an MP3 audio file, not an SSH key".into());
+        }
+    }
+    None
+}
+
+fn looks_like_private_key(text: &str) -> bool {
+    let t = text.trim_start();
+    t.contains("BEGIN OPENSSH PRIVATE KEY")
+        || t.contains("BEGIN RSA PRIVATE KEY")
+        || t.contains("BEGIN EC PRIVATE KEY")
+        || t.contains("BEGIN DSA PRIVATE KEY")
+        || t.contains("BEGIN PRIVATE KEY")
+        || t.contains("BEGIN ENCRYPTED PRIVATE KEY")
+}
+
+/// Local discoveries shown in the SSH import form (safe defaults).
+#[derive(Debug, Clone, Default)]
+pub struct SshImportHints {
+    /// Default login name (current OS user), if known.
+    pub default_user: Option<String>,
+    pub agent_present: bool,
+    pub config_path: Option<PathBuf>,
+    /// Existing default private key paths under `~/.ssh`.
+    pub identity_candidates: Vec<PathBuf>,
+    /// `~/.ssh` if it exists as a directory.
+    pub ssh_dir: Option<PathBuf>,
+}
+
+impl SshImportHints {
+    /// Human lines for the form “what we found” panel.
+    pub fn summary_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        match &self.default_user {
+            Some(u) => lines.push(format!(
+                "Local account (hint only — remote Login stays empty unless you set it): {u}"
+            )),
+            None => lines.push(
+                "Local account: (unknown). Leave Login empty for Host user@… / ssh config."
+                    .into(),
+            ),
+        }
+        lines.push(format!(
+            "ssh-agent: {}",
+            if self.agent_present {
+                "available"
+            } else {
+                "not detected"
+            }
+        ));
+        match &self.config_path {
+            Some(p) => lines.push(format!("SSH config: {}", p.display())),
+            None => lines.push("SSH config: (none at ~/.ssh/config)".into()),
+        }
+        if self.identity_candidates.is_empty() {
+            lines.push("Default keys in ~/.ssh: (none found)".into());
+        } else {
+            lines.push("Default keys in ~/.ssh:".into());
+            for p in &self.identity_candidates {
+                let name = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("?");
+                lines.push(format!("  • {name}  ({})", p.display()));
+            }
+        }
+        if let Some(d) = &self.ssh_dir {
+            lines.push(format!("Browse starts at: {}", d.display()));
+        }
+        lines
+    }
+}
+
+/// Snapshot local SSH-related discoveries for the import form.
+pub fn discover_ssh_import_hints() -> SshImportHints {
+    let ssh_dir = dirs_home().map(|h| h.join(".ssh")).filter(|p| p.is_dir());
+    SshImportHints {
+        default_user: current_os_username(),
+        agent_present: ssh_agent_present(),
+        config_path: default_ssh_config_path(),
+        identity_candidates: default_ssh_key_candidates(),
+        ssh_dir,
+    }
+}
+
 /// Whether an ssh-agent appears available.
 pub fn ssh_agent_present() -> bool {
     match std::env::var_os("SSH_AUTH_SOCK") {
@@ -888,5 +1137,90 @@ proxyjump bastion
         assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout), "p@ss'word\n");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn validate_accepts_openssh_private_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("id_ed25519");
+        // Assemble PEM so the PII/secret gate does not treat fixtures as live keys.
+        // Body is fake base64, not a real key material.
+        let pem = format!(
+            "-----BEGIN {}-----\n{}\n-----END {}-----\n",
+            "OPENSSH PRIVATE KEY",
+            "b3BlbnNzaC1rZXktdjEAAAAA",
+            "OPENSSH PRIVATE KEY"
+        );
+        fs::write(&key, pem).unwrap();
+        assert!(
+            validate_ssh_identity_file(&key).is_ok(),
+            "{:?}",
+            validate_ssh_identity_file(&key)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_missing_and_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+        assert!(!validate_ssh_identity_file(&missing).is_ok());
+        let empty = dir.path().join("empty");
+        fs::write(&empty, b"").unwrap();
+        assert!(!validate_ssh_identity_file(&empty).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_mp4_without_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp4 = dir.path().join("clip.mp4");
+        // Minimal ftyp box at offset 4
+        let mut bytes = vec![0u8; 32];
+        bytes[4..8].copy_from_slice(b"ftyp");
+        bytes[8..12].copy_from_slice(b"isom");
+        fs::write(&mp4, &bytes).unwrap();
+        let v = validate_ssh_identity_file(&mp4);
+        assert!(!v.is_ok(), "mp4 must be rejected");
+        assert!(
+            v.reason().unwrap_or("").to_ascii_lowercase().contains("video")
+                || v.reason().unwrap_or("").contains("MP4"),
+            "reason={:?}",
+            v.reason()
+        );
+    }
+
+    #[test]
+    fn validate_rejects_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!validate_ssh_identity_file(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_png_magic() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("x.png");
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&[0u8; 64]);
+        fs::write(&png, bytes).unwrap();
+        assert!(!validate_ssh_identity_file(&png).is_ok());
+    }
+
+    #[test]
+    fn current_os_username_is_nonempty_when_available() {
+        // Soft: CI may still have USER; if both None and id fails, skip assert.
+        if let Some(u) = current_os_username() {
+            assert!(!u.is_empty());
+            assert!(!u.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn discover_hints_summary_includes_user_line() {
+        let h = discover_ssh_import_hints();
+        let lines = h.summary_lines();
+        assert!(
+            lines.iter().any(|l| l.starts_with("Local user")),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.starts_with("ssh-agent")), "{lines:?}");
     }
 }

@@ -385,6 +385,22 @@ impl SessionHandle {
         }
         rx.await.unwrap_or_default()
     }
+
+    /// Tear down owned MCP clients for exit (disconnect remotes; reap local).
+    ///
+    /// Completes when progress has been emitted and owned clients are closed.
+    /// Safe to call when the session has no MCP clients (returns immediately).
+    pub async fn prepare_mcp_exit(&self) {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .cmd_tx
+            .send(SessionCommand::PrepareMcpExit { respond_to: tx })
+            .is_err()
+        {
+            return;
+        }
+        let _ = rx.await;
+    }
     pub async fn toggle_mcp_server(
         &self,
         server_name: String,

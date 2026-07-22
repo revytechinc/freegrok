@@ -47,6 +47,10 @@ pub mod mcp_methods {
     pub const SERVERS_UPDATED: &str = "x.ai/mcp/servers_updated";
     pub const TOOLS_CHANGED: &str = "x.ai/mcp/tools_changed";
     pub const INIT_PROGRESS: &str = "x.ai/mcp/init_progress";
+    /// App/session exit: request ownership-aware MCP teardown.
+    pub const PREPARE_EXIT: &str = "x.ai/mcp/prepare_exit";
+    /// Progress while prepare_exit runs (`Closing MCP connections (N/X)…`).
+    pub const EXIT_PROGRESS: &str = "x.ai/mcp/exit_progress";
 }
 use crate::agent::MvpAgent;
 use crate::session::managed_mcp::MANAGED_MCP_PREFIX;
@@ -352,6 +356,7 @@ enum McpRoute {
     ToggleTool,
     Upsert,
     Delete,
+    PrepareExit,
 }
 
 fn route_mcp_method(method: &str) -> Option<McpRoute> {
@@ -366,6 +371,7 @@ fn route_mcp_method(method: &str) -> Option<McpRoute> {
         mcp_methods::TOGGLE_TOOL => McpRoute::ToggleTool,
         mcp_methods::UPSERT => McpRoute::Upsert,
         mcp_methods::DELETE => McpRoute::Delete,
+        mcp_methods::PREPARE_EXIT => McpRoute::PrepareExit,
         _ => return None,
     })
 }
@@ -383,6 +389,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         Some(McpRoute::ToggleTool) => handle_toggle_tool(agent, args).await,
         Some(McpRoute::Upsert) => handle_upsert(agent, args).await,
         Some(McpRoute::Delete) => handle_delete(agent, args).await,
+        Some(McpRoute::PrepareExit) => handle_prepare_exit(agent, args).await,
         None => Err(acp::Error::method_not_found()),
     }
 }
@@ -1908,6 +1915,35 @@ async fn handle_delete(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     let _ = crate::util::config::save_mcp_server_enabled(&req.server_name, true).await;
 
     to_ext_response(Ok(McpToggleResponse { ok: true }))
+}
+
+// ── mcp/prepare_exit handler ────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpPrepareExitRequest {
+    session_id: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpPrepareExitResponse {
+    ok: bool,
+}
+
+/// Tear down this session's owned MCP clients for app exit.
+///
+/// Emits `x.ai/mcp/exit_progress` during the run. Only processes marked
+/// `started_by_us` are reaped; remote services are disconnect-only.
+async fn handle_prepare_exit(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+    let req = parse_params::<McpPrepareExitRequest>(args)?;
+    let acp_id = acp::SessionId::new(req.session_id.clone());
+    let Some(handle) = agent.get_session_handle(&acp_id) else {
+        // Session already gone — nothing to close.
+        return to_ext_response(Ok(McpPrepareExitResponse { ok: true }));
+    };
+    handle.prepare_mcp_exit().await;
+    to_ext_response(Ok(McpPrepareExitResponse { ok: true }))
 }
 
 #[cfg(test)]

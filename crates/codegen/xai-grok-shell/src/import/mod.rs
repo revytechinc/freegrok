@@ -35,8 +35,9 @@ pub use remote_paths::{
     project_catalog, resolve_posix_catalog, resolve_windows_catalog, RemoteOs, ResolvedPath,
 };
 pub use ssh::{
-    auth_diagnostics, build_ssh_invocation, default_ssh_config_path, default_ssh_key_candidates,
-    remote_home, remote_paths_exist, remote_read_file, remote_uname, ssh_agent_present, ssh_exec,
-    ssh_exec_async, ssh_resolve_config, SshAuth, SshError, SshInvocation, SshResolvedConfig,
-    SshSession, SshTarget,
+    auth_diagnostics, build_ssh_invocation, current_os_username, default_ssh_config_path,
+    default_ssh_key_candidates, discover_ssh_import_hints, remote_home, remote_paths_exist,
+    remote_read_file, remote_uname, ssh_agent_present, ssh_exec, ssh_exec_async, ssh_resolve_config,
+    validate_ssh_identity_file, IdentityValidation, SshAuth, SshError, SshImportHints, SshInvocation,
+    SshResolvedConfig, SshSession, SshTarget, SSH_IDENTITY_MAX_BYTES,
 };

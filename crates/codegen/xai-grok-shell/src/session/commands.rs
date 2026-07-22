@@ -395,6 +395,15 @@ pub enum SessionCommand {
     GetMcpStatus {
         respond_to: oneshot::Sender<crate::extensions::mcp::McpStatusSnapshot>,
     },
+    /// Ownership-aware MCP teardown for app/session exit.
+    ///
+    /// Drains owned clients, emits `x.ai/mcp/exit_progress` so the pager can
+    /// show `Closing MCP connections (N/X)…`, and reaps only processes this
+    /// session started (`started_by_us`). Remote multi-tenant MCP is
+    /// disconnect-only.
+    PrepareMcpExit {
+        respond_to: oneshot::Sender<()>,
+    },
     GetManagedGatewayDisabledTools {
         respond_to:
             oneshot::Sender<std::collections::HashMap<String, std::collections::HashSet<String>>>,

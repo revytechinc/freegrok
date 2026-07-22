@@ -1084,6 +1084,9 @@ pub struct AppView {
     /// When true, the event loop should exit so the user can relaunch
     /// to pick up the downloaded update.
     pub quit_for_update: bool,
+    /// Staged quit is waiting on MCP prepare_exit (progress chip visible).
+    /// Prevents double-quit from re-entering prepare while already exiting.
+    pub exit_mcp_prepare_in_progress: bool,
     /// Generation and state for the one launch-scoped foreign resume detection.
     pub(crate) foreign_resume_launch_generation: u64,
     pub(crate) foreign_resume_launch: Option<crate::app::foreign_sessions::ForeignResumeLaunch>,
@@ -1093,7 +1096,19 @@ pub struct AppView {
     pub relaunch: Option<ScreenModeRelaunch>,
     /// Whether importable `.claude/` settings were detected at startup.
     pub has_claude_import: bool,
-    /// When set, the welcome screen renders an interactive import modal instead of normal content.
+    /// Background Claude settings scan in flight ([`Effect::ScanClaudeImport`]).
+    pub import_claude_scanning: bool,
+    /// Background Claude import apply in flight ([`Effect::ApplyClaudeImport`]).
+    pub import_claude_applying: bool,
+    /// Multi-source import menu (`/import-menu`).
+    pub import_menu_modal: Option<crate::views::import_menu_modal::ImportMenuModalState>,
+    /// Scrollable report for import discovery / apply results.
+    pub import_report_modal: Option<crate::views::import_report_modal::ImportReportModalState>,
+    /// SSH import form (host, user, identity).
+    pub ssh_import_form: Option<crate::views::ssh_import_form_modal::SshImportFormModalState>,
+    /// Reusable local path browser (e.g. SSH identity under `~/.ssh`).
+    pub path_browser: Option<crate::views::path_browser_modal::PathBrowserModalState>,
+    /// When set, the checklist for Claude settings import is open.
     pub import_claude_modal: Option<crate::views::import_claude_modal::ImportClaudeModalState>,
     /// Doc viewer overlay for the welcome screen (release notes via Ctrl+L).
     pub welcome_doc_viewer: Option<crate::views::modal::ActiveModal>,
@@ -1383,8 +1398,15 @@ impl AppView {
             foreign_resume_launch_generation: 0,
             foreign_resume_launch: None,
             quit_for_update: false,
+            exit_mcp_prepare_in_progress: false,
             relaunch: None,
             has_claude_import: false,
+            import_claude_scanning: false,
+            import_claude_applying: false,
+            import_menu_modal: None,
+            import_report_modal: None,
+            ssh_import_form: None,
+            path_browser: None,
             import_claude_modal: None,
             welcome_doc_viewer: None,
             screen_mode: ScreenMode::Inline,
@@ -2242,6 +2264,10 @@ impl AppView {
                     sp_content_loading: self.session_picker_content_loading,
                     sp_entries_query: &self.session_picker_entries_query,
                     has_claude_import: self.has_claude_import,
+                    import_menu_modal: &mut self.import_menu_modal,
+                    import_report_modal: &mut self.import_report_modal,
+                    ssh_import_form: &mut self.ssh_import_form,
+                    path_browser: &mut self.path_browser,
                     import_claude_modal: &mut self.import_claude_modal,
                     welcome_doc_viewer: &mut self.welcome_doc_viewer,
                     changelog_markdown: &self.changelog_markdown,
@@ -2391,6 +2417,115 @@ impl AppView {
                             _ => {}
                         }
                     }
+                }
+                if let Some(modal) = self.path_browser.as_mut() {
+                    use crate::views::path_browser_modal::PathBrowserOutcome;
+                    let purpose = modal.purpose;
+                    let outcome_to_input = |o: PathBrowserOutcome| match o {
+                        PathBrowserOutcome::Selected(path) => {
+                            InputOutcome::Action(Action::PathBrowserSelected { purpose, path })
+                        }
+                        PathBrowserOutcome::Cancelled => {
+                            InputOutcome::Action(Action::PathBrowserCancel)
+                        }
+                        PathBrowserOutcome::Changed => InputOutcome::Changed,
+                        PathBrowserOutcome::Unchanged => InputOutcome::Unchanged,
+                    };
+                    if let Event::Key(key) = ev {
+                        if key.kind == KeyEventKind::Release {
+                            return InputOutcome::Unchanged;
+                        }
+                        return outcome_to_input(modal.handle_key(key));
+                    }
+                    if let Event::Mouse(mouse) = ev {
+                        return outcome_to_input(modal.handle_mouse(
+                            mouse.kind,
+                            mouse.column,
+                            mouse.row,
+                        ));
+                    }
+                    return InputOutcome::Unchanged;
+                }
+                if let Some(modal) = self.ssh_import_form.as_mut() {
+                    use crate::views::ssh_import_form_modal::SshImportFormOutcome;
+                    let outcome_to_input = |o: SshImportFormOutcome| match o {
+                        SshImportFormOutcome::Cancelled => {
+                            InputOutcome::Action(Action::SshImportFormCancel)
+                        }
+                        SshImportFormOutcome::BrowseIdentity => {
+                            InputOutcome::Action(Action::SshImportBrowseIdentity)
+                        }
+                        SshImportFormOutcome::Submit(values) => {
+                            InputOutcome::Action(Action::SshImportFormSubmit(values))
+                        }
+                        SshImportFormOutcome::Changed => InputOutcome::Changed,
+                        SshImportFormOutcome::Unchanged => InputOutcome::Unchanged,
+                    };
+                    if let Event::Key(key) = ev {
+                        if key.kind == KeyEventKind::Release {
+                            return InputOutcome::Unchanged;
+                        }
+                        return outcome_to_input(modal.handle_key(key));
+                    }
+                    if let Event::Mouse(mouse) = ev {
+                        return outcome_to_input(modal.handle_mouse(
+                            mouse.kind,
+                            mouse.column,
+                            mouse.row,
+                        ));
+                    }
+                    return InputOutcome::Unchanged;
+                }
+                if let Some(modal) = self.import_report_modal.as_mut() {
+                    use crate::views::import_report_modal::ImportReportOutcome;
+                    let outcome_to_input = |o: ImportReportOutcome| match o {
+                        ImportReportOutcome::Closed => {
+                            InputOutcome::Action(Action::ImportReportClose)
+                        }
+                        ImportReportOutcome::Changed => InputOutcome::Changed,
+                        ImportReportOutcome::Unchanged => InputOutcome::Unchanged,
+                    };
+                    if let Event::Key(key) = ev {
+                        if key.kind == KeyEventKind::Release {
+                            return InputOutcome::Unchanged;
+                        }
+                        return outcome_to_input(modal.handle_key(key));
+                    }
+                    if let Event::Mouse(mouse) = ev {
+                        return outcome_to_input(modal.handle_mouse(
+                            mouse.kind,
+                            mouse.column,
+                            mouse.row,
+                        ));
+                    }
+                    return InputOutcome::Unchanged;
+                }
+                if let Some(modal) = self.import_menu_modal.as_mut() {
+                    use crate::views::import_menu_modal::ImportMenuOutcome;
+                    let outcome_to_input = |o: ImportMenuOutcome| match o {
+                        ImportMenuOutcome::Selected(source) => {
+                            InputOutcome::Action(Action::ImportMenuSelect(source))
+                        }
+                        ImportMenuOutcome::Cancelled => {
+                            InputOutcome::Action(Action::ImportMenuCancel)
+                        }
+                        ImportMenuOutcome::Changed => InputOutcome::Changed,
+                        ImportMenuOutcome::Unchanged => InputOutcome::Unchanged,
+                    };
+                    if let Event::Key(key) = ev {
+                        if key.kind == KeyEventKind::Release {
+                            return InputOutcome::Unchanged;
+                        }
+                        return outcome_to_input(modal.handle_key(key));
+                    }
+                    if let Event::Mouse(mouse) = ev {
+                        return outcome_to_input(modal.handle_mouse(
+                            mouse.kind,
+                            mouse.column,
+                            mouse.row,
+                        ));
+                    }
+                    return InputOutcome::Unchanged;
                 }
                 if let Some(modal) = self.import_claude_modal.as_mut() {
                     use crate::views::import_claude_modal::ImportClaudeModalOutcome;
@@ -2818,6 +2953,10 @@ struct WelcomeInputCtx<'a> {
     /// [`crate::views::session_picker::effective_filter_query`]).
     sp_entries_query: &'a Option<String>,
     has_claude_import: bool,
+    import_menu_modal: &'a mut Option<crate::views::import_menu_modal::ImportMenuModalState>,
+    import_report_modal: &'a mut Option<crate::views::import_report_modal::ImportReportModalState>,
+    ssh_import_form: &'a mut Option<crate::views::ssh_import_form_modal::SshImportFormModalState>,
+    path_browser: &'a mut Option<crate::views::path_browser_modal::PathBrowserModalState>,
     import_claude_modal: &'a mut Option<crate::views::import_claude_modal::ImportClaudeModalState>,
     welcome_doc_viewer: &'a mut Option<crate::views::modal::ActiveModal>,
     changelog_markdown: &'a Option<String>,
@@ -2836,6 +2975,91 @@ struct WelcomeInputCtx<'a> {
 }
 /// Welcome view input -- auth-state-aware routing.
 fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutcome {
+    if let Some(modal) = ctx.path_browser.as_mut() {
+        use crate::views::path_browser_modal::PathBrowserOutcome;
+        let purpose = modal.purpose;
+        let outcome_to_input = |o: PathBrowserOutcome| match o {
+            PathBrowserOutcome::Selected(path) => {
+                InputOutcome::Action(Action::PathBrowserSelected { purpose, path })
+            }
+            PathBrowserOutcome::Cancelled => InputOutcome::Action(Action::PathBrowserCancel),
+            PathBrowserOutcome::Changed => InputOutcome::Changed,
+            PathBrowserOutcome::Unchanged => InputOutcome::Unchanged,
+        };
+        if let Event::Key(key) = ev {
+            if key.kind == crossterm::event::KeyEventKind::Release {
+                return InputOutcome::Unchanged;
+            }
+            return outcome_to_input(modal.handle_key(key));
+        }
+        if let Event::Mouse(mouse) = ev {
+            return outcome_to_input(modal.handle_mouse(mouse.kind, mouse.column, mouse.row));
+        }
+        return InputOutcome::Unchanged;
+    }
+    if let Some(modal) = ctx.ssh_import_form.as_mut() {
+        use crate::views::ssh_import_form_modal::SshImportFormOutcome;
+        let outcome_to_input = |o: SshImportFormOutcome| match o {
+            SshImportFormOutcome::Cancelled => InputOutcome::Action(Action::SshImportFormCancel),
+            SshImportFormOutcome::BrowseIdentity => {
+                InputOutcome::Action(Action::SshImportBrowseIdentity)
+            }
+            SshImportFormOutcome::Submit(values) => {
+                InputOutcome::Action(Action::SshImportFormSubmit(values))
+            }
+            SshImportFormOutcome::Changed => InputOutcome::Changed,
+            SshImportFormOutcome::Unchanged => InputOutcome::Unchanged,
+        };
+        if let Event::Key(key) = ev {
+            if key.kind == crossterm::event::KeyEventKind::Release {
+                return InputOutcome::Unchanged;
+            }
+            return outcome_to_input(modal.handle_key(key));
+        }
+        if let Event::Mouse(mouse) = ev {
+            return outcome_to_input(modal.handle_mouse(mouse.kind, mouse.column, mouse.row));
+        }
+        return InputOutcome::Unchanged;
+    }
+    if let Some(modal) = ctx.import_report_modal.as_mut() {
+        use crate::views::import_report_modal::ImportReportOutcome;
+        let outcome_to_input = |o: ImportReportOutcome| match o {
+            ImportReportOutcome::Closed => InputOutcome::Action(Action::ImportReportClose),
+            ImportReportOutcome::Changed => InputOutcome::Changed,
+            ImportReportOutcome::Unchanged => InputOutcome::Unchanged,
+        };
+        if let Event::Key(key) = ev {
+            if key.kind == crossterm::event::KeyEventKind::Release {
+                return InputOutcome::Unchanged;
+            }
+            return outcome_to_input(modal.handle_key(key));
+        }
+        if let Event::Mouse(mouse) = ev {
+            return outcome_to_input(modal.handle_mouse(mouse.kind, mouse.column, mouse.row));
+        }
+        return InputOutcome::Unchanged;
+    }
+    if let Some(modal) = ctx.import_menu_modal.as_mut() {
+        use crate::views::import_menu_modal::ImportMenuOutcome;
+        let outcome_to_input = |o: ImportMenuOutcome| match o {
+            ImportMenuOutcome::Selected(source) => {
+                InputOutcome::Action(Action::ImportMenuSelect(source))
+            }
+            ImportMenuOutcome::Cancelled => InputOutcome::Action(Action::ImportMenuCancel),
+            ImportMenuOutcome::Changed => InputOutcome::Changed,
+            ImportMenuOutcome::Unchanged => InputOutcome::Unchanged,
+        };
+        if let Event::Key(key) = ev {
+            if key.kind == crossterm::event::KeyEventKind::Release {
+                return InputOutcome::Unchanged;
+            }
+            return outcome_to_input(modal.handle_key(key));
+        }
+        if let Event::Mouse(mouse) = ev {
+            return outcome_to_input(modal.handle_mouse(mouse.kind, mouse.column, mouse.row));
+        }
+        return InputOutcome::Unchanged;
+    }
     if let Some(modal) = ctx.import_claude_modal.as_mut() {
         use crate::views::import_claude_modal::ImportClaudeModalOutcome;
         let outcome_to_input = |o: ImportClaudeModalOutcome| match o {
@@ -3215,7 +3439,7 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                 return InputOutcome::Action(Action::ResumeForeignSession);
             }
             if ctx.has_claude_import && key!('i', CONTROL).matches(key) {
-                return InputOutcome::Action(Action::ImportClaudeSettings);
+                return InputOutcome::Action(Action::OpenImportMenu);
             }
             if ctx.has_claude_import && key!('I', CONTROL | SHIFT).matches(key) {
                 return InputOutcome::Action(Action::DismissClaudeImport);
@@ -3454,7 +3678,7 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                     && mouse.row >= rect.y
                     && mouse.row < rect.y + rect.height
                 {
-                    return InputOutcome::Action(Action::ImportClaudeSettings);
+                    return InputOutcome::Action(Action::OpenImportMenu);
                 }
                 if let Some(rect) = ctx.prompt_rect
                     && matches!(ctx.auth_state, AuthState::Done)
@@ -3612,7 +3836,7 @@ fn dispatch_menu_action(
         (None, base + 2)
     };
     if has_claude_import && index == 0 {
-        return InputOutcome::Action(Action::ImportClaudeSettings);
+        return InputOutcome::Action(Action::OpenImportMenu);
     }
     if index == worktree_idx {
         return InputOutcome::Action(Action::OpenNewWorktreeDialog);
@@ -4030,6 +4254,46 @@ impl AppView {
                         self.welcome_announcement.truncated = result.announcement_truncated;
                         self.welcome_announcement.rect = result.announcement_rect;
                         self.session_picker_state.hit_areas = result.session_picker_hit_areas;
+                        if let Some(modal) = self.path_browser.as_mut() {
+                            let theme = crate::theme::Theme::current();
+                            crate::views::path_browser_modal::render_path_browser_modal(
+                                f.buffer_mut(),
+                                view_area,
+                                modal,
+                                &theme,
+                                compact,
+                            );
+                        }
+                        if let Some(modal) = self.ssh_import_form.as_mut() {
+                            let theme = crate::theme::Theme::current();
+                            crate::views::ssh_import_form_modal::render_ssh_import_form_modal(
+                                f.buffer_mut(),
+                                view_area,
+                                modal,
+                                &theme,
+                                compact,
+                            );
+                        }
+                        if let Some(modal) = self.import_report_modal.as_mut() {
+                            let theme = crate::theme::Theme::current();
+                            crate::views::import_report_modal::render_import_report_modal(
+                                f.buffer_mut(),
+                                view_area,
+                                modal,
+                                &theme,
+                                compact,
+                            );
+                        }
+                        if let Some(modal) = self.import_menu_modal.as_mut() {
+                            let theme = crate::theme::Theme::current();
+                            crate::views::import_menu_modal::render_import_menu_modal(
+                                f.buffer_mut(),
+                                view_area,
+                                modal,
+                                &theme,
+                                compact,
+                            );
+                        }
                         if let Some(modal) = self.import_claude_modal.as_mut() {
                             let theme = crate::theme::Theme::current();
                             crate::views::import_claude_modal::render_import_claude_modal(
@@ -4229,6 +4493,46 @@ impl AppView {
                                 voice_listening,
                                 voice_interim.as_deref(),
                             );
+                            if let Some(modal) = self.path_browser.as_mut() {
+                                let theme = crate::theme::Theme::current();
+                                crate::views::path_browser_modal::render_path_browser_modal(
+                                    f.buffer_mut(),
+                                    view_area,
+                                    modal,
+                                    &theme,
+                                    compact,
+                                );
+                            }
+                            if let Some(modal) = self.ssh_import_form.as_mut() {
+                                let theme = crate::theme::Theme::current();
+                                crate::views::ssh_import_form_modal::render_ssh_import_form_modal(
+                                    f.buffer_mut(),
+                                    view_area,
+                                    modal,
+                                    &theme,
+                                    compact,
+                                );
+                            }
+                            if let Some(modal) = self.import_report_modal.as_mut() {
+                                let theme = crate::theme::Theme::current();
+                                crate::views::import_report_modal::render_import_report_modal(
+                                    f.buffer_mut(),
+                                    view_area,
+                                    modal,
+                                    &theme,
+                                    compact,
+                                );
+                            }
+                            if let Some(modal) = self.import_menu_modal.as_mut() {
+                                let theme = crate::theme::Theme::current();
+                                crate::views::import_menu_modal::render_import_menu_modal(
+                                    f.buffer_mut(),
+                                    view_area,
+                                    modal,
+                                    &theme,
+                                    compact,
+                                );
+                            }
                             if let Some(modal) = self.import_claude_modal.as_mut() {
                                 let theme = crate::theme::Theme::current();
                                 crate::views::import_claude_modal::render_import_claude_modal(
@@ -4247,7 +4551,13 @@ impl AppView {
                             }
                             let (cursor_pos, post_flush) = result;
                             let has_cloud = false;
-                            if has_cloud || self.import_claude_modal.is_some() {
+                            if has_cloud
+                                || self.path_browser.is_some()
+                                || self.ssh_import_form.is_some()
+                                || self.import_report_modal.is_some()
+                                || self.import_menu_modal.is_some()
+                                || self.import_claude_modal.is_some()
+                            {
                                 link_spans.clear();
                             }
                             let cursor = if has_cloud { None } else { cursor_pos };
@@ -4481,7 +4791,11 @@ impl AppView {
         matches!(
             self.active_view, ActiveView::Agent(id) if self.agents.get(& id)
             .is_some_and(| a | a.extensions_modal.is_some() || a.active_modal.is_some())
-        ) || self.import_claude_modal.is_some()
+        ) || self.path_browser.is_some()
+            || self.ssh_import_form.is_some()
+            || self.import_report_modal.is_some()
+            || self.import_menu_modal.is_some()
+            || self.import_claude_modal.is_some()
             || self.new_worktree_dialog.is_some()
             || self.welcome_doc_viewer.is_some()
             || matches!(
@@ -5371,8 +5685,15 @@ pub(crate) mod tests {
             foreign_resume_launch_generation: 0,
             foreign_resume_launch: None,
             quit_for_update: false,
+            exit_mcp_prepare_in_progress: false,
             relaunch: None,
             has_claude_import: false,
+            import_claude_scanning: false,
+            import_claude_applying: false,
+            import_menu_modal: None,
+            import_report_modal: None,
+            ssh_import_form: None,
+            path_browser: None,
             import_claude_modal: None,
             welcome_doc_viewer: None,
             screen_mode: ScreenMode::Inline,
@@ -7141,7 +7462,7 @@ pub(crate) mod tests {
         let md = Some("# notes");
         assert!(matches!(
             dispatch_menu_action(0, true, true, md),
-            InputOutcome::Action(Action::ImportClaudeSettings)
+            InputOutcome::Action(Action::OpenImportMenu)
         ));
         assert!(matches!(
             dispatch_menu_action(1, true, true, md),

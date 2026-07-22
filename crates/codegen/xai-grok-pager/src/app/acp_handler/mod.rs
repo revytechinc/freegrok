@@ -87,7 +87,8 @@ use follow_ups::handle_follow_ups;
 pub(crate) use interactions::handle_ask_user_question;
 use interactions::handle_exit_plan_mode;
 use mcp::{
-    handle_mcp_init_progress, handle_mcp_server_status, handle_mcp_servers_updated,
+    handle_mcp_exit_progress, handle_mcp_init_progress, handle_mcp_server_status,
+    handle_mcp_servers_updated,
     handle_mcp_tools_changed, push_server_status_enabled,
 };
 use settings::{
@@ -605,6 +606,7 @@ fn handle_ext_notification(notif: &acp::ExtNotification, app: &mut AppView) -> b
         "x.ai/announcements/update" => handle_announcements_update(notif, app),
         "x.ai/git_head_changed" => handle_git_head_changed(notif, app),
         "x.ai/mcp/init_progress" => handle_mcp_init_progress(notif, app),
+        "x.ai/mcp/exit_progress" => handle_mcp_exit_progress(notif, app),
         "x.ai/mcp/tools_changed" | "x.ai/mcp_initialized" => handle_mcp_tools_changed(notif, app),
         "x.ai/mcp/server_status" if push_server_status_enabled() => {
             handle_mcp_server_status(notif, app)

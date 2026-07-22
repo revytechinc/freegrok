@@ -3,6 +3,7 @@ mod auth;
 mod billing;
 mod cta_e2e;
 mod dashboard;
+mod import_claude;
 mod jump;
 mod modes;
 mod notes;
@@ -221,8 +222,15 @@ fn test_app() -> AppView {
         foreign_resume_launch_generation: 0,
         foreign_resume_launch: None,
         quit_for_update: false,
+        exit_mcp_prepare_in_progress: false,
         relaunch: None,
         import_claude_modal: None,
+        import_menu_modal: None,
+        import_report_modal: None,
+        ssh_import_form: None,
+        path_browser: None,
+        import_claude_scanning: false,
+        import_claude_applying: false,
         welcome_doc_viewer: None,
         screen_mode: crate::app::ScreenMode::Inline,
         pending_effects: Vec::new(),

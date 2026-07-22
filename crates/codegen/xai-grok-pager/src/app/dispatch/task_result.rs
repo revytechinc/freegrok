@@ -75,6 +75,48 @@ pub(super) fn unregister_all_active_sessions(app: &AppView) -> Vec<Effect> {
         })
         .collect()
 }
+
+/// Seed per-agent exit progress chips and return staged quit effects.
+///
+/// When prepare is already in progress, finishes with [`Effect::Quit`].
+/// Otherwise shows `Closing MCP connections…` and runs prepare_exit while
+/// the TUI is still painted.
+pub(super) fn staged_quit_effects(app: &mut AppView, mut base: Vec<Effect>) -> Vec<Effect> {
+    if app.exit_mcp_prepare_in_progress {
+        base.push(Effect::Quit);
+        return base;
+    }
+    app.exit_mcp_prepare_in_progress = true;
+    seed_mcp_exit_progress(app);
+    let session_ids: Vec<String> = app
+        .agents
+        .values()
+        .filter_map(|a| a.session.session_id.as_ref().map(|s| s.0.to_string()))
+        .collect();
+    base.push(Effect::PrepareMcpExit { session_ids });
+    base
+}
+
+fn seed_mcp_exit_progress(app: &mut AppView) {
+    use crate::app::agent_view::McpExitProgress;
+    use crate::views::extensions_modal::TabDataState;
+    for agent in app.agents.values_mut() {
+        let from_init = agent
+            .mcp_init_progress
+            .as_ref()
+            .map(|p| p.total)
+            .unwrap_or(0);
+        let from_modal = agent
+            .extensions_modal
+            .as_ref()
+            .map(|m| match &m.mcps_data {
+                TabDataState::Loaded(servers) => servers.len() as u32,
+                _ => 0,
+            })
+            .unwrap_or(0);
+        agent.mcp_exit_progress = Some(McpExitProgress::seed(from_init.max(from_modal)));
+    }
+}
 pub(super) const X11_PRIMARY_PASTE_HINT: &str = "Try Shift+Insert to paste selected text";
 fn show_clipboard_toast(target: &ClipboardPasteTarget, message: &str, app: &mut AppView) {
     match target {
@@ -958,6 +1000,21 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         TaskResult::CreditLimitRecheckComplete { agent_id, meta } => {
             handle_credit_limit_recheck_complete(app, agent_id, meta)
         }
+        TaskResult::McpExitReady => {
+            // Progress chip can clear; leave the TUI now.
+            for agent in app.agents.values_mut() {
+                agent.mcp_exit_progress = None;
+            }
+            vec![Effect::Quit]
+        }
+        TaskResult::ClaudeImportScanned { plan, cwd } => {
+            super::import_claude::handle_claude_import_scanned(app, plan, cwd)
+        }
+        TaskResult::ClaudeImportApplied {
+            summary,
+            error,
+            cwd,
+        } => super::import_claude::handle_claude_import_applied(app, summary, error, cwd),
         TaskResult::LogoutComplete => {
             app.auth_state = AuthState::Pending { error: None };
             app.access_gate_shown_logged = false;

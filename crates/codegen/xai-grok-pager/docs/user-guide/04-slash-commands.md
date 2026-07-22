@@ -456,13 +456,18 @@ Browse in-TUI How-to Guides, open online Build docs, or jump to a guide by title
 
 Aliases: `/howto`, `/guides`
 
-### `/import-claude`
+### `/import-menu`
 
-Open the Claude settings import modal to bring over `~/.claude` settings: permissions, environment variables, MCP servers, hooks, and paths.
+Open the multi-source **Import settings** menu. Pick a source:
+
+1. **Claude settings** — interactive checklist (permissions, env, MCP, hooks, skill/rule paths)
+2. **OpenCode / Antigravity / Cursor / Junie** — discovery summary
 
 ```
-/import-claude
+/import-menu
 ```
+
+Alias: `/import-claude` (same menu). Text-only scan without a UI: `/import [source]`.
 
 ---
 

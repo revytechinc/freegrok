@@ -898,6 +898,72 @@ impl McpState {
         )
     }
 
+    /// Tear down **owned** MCP clients for session/app exit.
+    ///
+    /// - Only drains [`Self::owned_clients`] (not shared/parent-pool clients).
+    /// - Reports progress via `on_progress` so UIs can show
+    ///   `Closing MCP connections (N/X)…`.
+    /// - Uses each client's [`McpClient::started_by_us`] mark: local stdio is
+    ///   reaped via transport Drop; remote HTTP/SSE is disconnect-only.
+    ///
+    /// Shared multi-tenant services are never stopped.
+    pub async fn teardown_owned_for_exit(
+        &mut self,
+        mut on_progress: impl FnMut(McpExitProgressReport),
+    ) {
+        let mut clients: Vec<(McpServerName, Arc<McpClient>)> =
+            self.owned_clients.drain().collect();
+        // Stable order for deterministic progress UI.
+        clients.sort_by(|a, b| a.0.cmp(&b.0));
+        let total = clients.len() as u32;
+        if total == 0 {
+            on_progress(McpExitProgressReport {
+                total: 0,
+                done: 0,
+                current_name: None,
+                started_by_us: false,
+                complete: true,
+            });
+            return;
+        }
+
+        on_progress(McpExitProgressReport {
+            total,
+            done: 0,
+            current_name: None,
+            started_by_us: false,
+            complete: false,
+        });
+
+        for (i, (name, client)) in clients.into_iter().enumerate() {
+            let started_by_us = client.started_by_us();
+            on_progress(McpExitProgressReport {
+                total,
+                done: i as u32,
+                current_name: Some(name.clone()),
+                started_by_us,
+                complete: false,
+            });
+            client.force_close_for_exit().await;
+            drop(client);
+            on_progress(McpExitProgressReport {
+                total,
+                done: (i as u32) + 1,
+                current_name: Some(name),
+                started_by_us,
+                complete: false,
+            });
+        }
+
+        on_progress(McpExitProgressReport {
+            total,
+            done: total,
+            current_name: None,
+            started_by_us: false,
+            complete: true,
+        });
+    }
+
     /// Import shared clients from a parent pool snapshot.
     /// Clients whose name collides with an agent-definition-owned server
     /// are skipped (the owned server takes priority).
@@ -910,6 +976,20 @@ impl McpState {
             }
         }
     }
+}
+
+/// Progress snapshot for ownership-aware MCP exit teardown.
+///
+/// Emitted to the pager so quit can show `Closing MCP connections (N/X)…`
+/// instead of appearing hung. `started_by_us` selects disconnect vs stop-local
+/// wording; remotes are always disconnect-only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpExitProgressReport {
+    pub total: u32,
+    pub done: u32,
+    pub current_name: Option<McpServerName>,
+    pub started_by_us: bool,
+    pub complete: bool,
 }
 
 /// Snapshot of an MCP connection pool, taken at subagent spawn time.
@@ -2501,6 +2581,17 @@ pub struct McpClient {
     tool_timeouts: HashMap<ToolName, u64>,
     /// See [`McpServerMetaConfig::expose_image_base64`].
     expose_image_base64: bool,
+    /// Whether **this session** started the underlying OS process.
+    ///
+    /// - `true` for stdio clients we `spawn`ed (`command` / `npx …`): exit
+    ///   teardown may reap the process group.
+    /// - `false` for remote HTTP/SSE (and ACP in-process) connections we only
+    ///   opened as a client: exit must **disconnect only** and must never try
+    ///   to stop a multi-tenant remote service.
+    ///
+    /// Set once at construction from the transport kind; never inferred later
+    /// at kill time.
+    started_by_us: bool,
     /// Shared `AuthorizationManager` for OAuth-enabled servers. `AuthClient`
     /// inside the transport holds a clone of this Arc so token updates are
     /// visible to both the transport and the re-auth path.
@@ -2667,6 +2758,9 @@ impl McpClient {
         let (startup_timeout_sec, tool_timeout_sec, tool_timeouts) =
             Self::load_timeouts(overrides, meta_config);
         let expose_image_base64 = Self::load_expose_image_base64(overrides, meta_config);
+        // Only stdio is an OS process this session started. HTTP/SSE/ACP are
+        // client connections to services we must not try to stop.
+        let started_by_us = matches!(transport, PendingTransport::Stdio(_));
         Self {
             client_id: next_client_id(),
             server_name,
@@ -2676,6 +2770,7 @@ impl McpClient {
             tool_timeout_sec,
             tool_timeouts,
             expose_image_base64,
+            started_by_us,
             auth_manager,
             http_config,
             byo_oauth_config,
@@ -3063,6 +3158,14 @@ impl McpClient {
         &self.server_name
     }
 
+    /// Whether this session started the underlying OS process (stdio spawn).
+    ///
+    /// See [`Self::started_by_us`] field docs. Exit teardown uses this to
+    /// choose disconnect-only vs process-group reap.
+    pub fn started_by_us(&self) -> bool {
+        self.started_by_us
+    }
+
     /// Unique identity of this client *instance*. Two clients for the
     /// same server name (e.g. a dead client and its replacement after
     /// a config remove+re-add) have different ids. Carried on
@@ -3070,6 +3173,43 @@ impl McpClient {
     /// death event for the current client from a stale predecessor's.
     pub fn client_id(&self) -> u64 {
         self.client_id
+    }
+
+    /// Close this client for session/app exit.
+    ///
+    /// Always disconnects the transport. Process-group kill only happens as a
+    /// side-effect of dropping a stdio transport we spawned
+    /// ([`Self::started_by_us`] == true via [`SafeTokioChildProcess`] Drop).
+    /// Remote HTTP/SSE clients only drop the client connection — shared
+    /// multi-tenant services are never stopped from here.
+    pub async fn force_close_for_exit(&self) {
+        {
+            let mut handle = self.liveness_handle.lock();
+            *handle = None;
+        }
+        *self.notify_tx.lock() = None;
+
+        let previous = {
+            let mut guard = self.state.lock().await;
+            std::mem::replace(&mut *guard, ClientState::Empty)
+        };
+        self.init_done.notify_waiters();
+
+        let action = if self.started_by_us {
+            "stop_local"
+        } else {
+            "disconnect_only"
+        };
+        tracing::info!(
+            server = %self.server_name,
+            started_by_us = self.started_by_us,
+            action,
+            "mcp.teardown closing client"
+        );
+
+        // Drop previous state outside the lock: Ready/Stdio Drop may block
+        // briefly on process reap; HTTP Drop only closes the client stream.
+        drop(previous);
     }
 
     pub fn startup_timeout_sec(&self) -> u64 {
@@ -6388,6 +6528,109 @@ mod tests {
         // Stdio clients must NOT have http_config — they can't reconnect via HTTP.
         let client = McpClient::stub("stdio-srv");
         assert!(client.http_config.is_none());
+    }
+
+    #[test]
+    fn http_clients_are_not_started_by_us() {
+        let client = McpClient::new_http(
+            "honcho".to_string(),
+            HttpConfig {
+                url: "https://mcp.example/mcp".to_string(),
+                headers: vec![],
+            },
+            None,
+            None,
+        );
+        assert!(
+            !client.started_by_us(),
+            "remote HTTP is a client connection only"
+        );
+    }
+
+    #[test]
+    fn acp_clients_are_not_started_by_us() {
+        struct NoopInvoker;
+        #[async_trait::async_trait]
+        impl crate::acp_transport::AcpReverseInvoker for NoopInvoker {
+            async fn invoke(
+                &self,
+                _server_id: &str,
+                _message: serde_json::Value,
+                _timeout: std::time::Duration,
+            ) -> Result<serde_json::Value, String> {
+                Err("unused".into())
+            }
+        }
+        let client = McpClient::new_acp(
+            "sdk".to_string(),
+            "sid".to_string(),
+            Arc::new(NoopInvoker),
+            None,
+            None,
+        );
+        assert!(!client.started_by_us());
+    }
+
+    #[tokio::test]
+    async fn teardown_owned_for_exit_reports_progress_and_clears_owned() {
+        let mut state = McpState::new(vec![]);
+        state.owned_clients.insert(
+            "alpha".into(),
+            Arc::new(McpClient::new_http(
+                "alpha".into(),
+                HttpConfig {
+                    url: "https://a.example/mcp".into(),
+                    headers: vec![],
+                },
+                None,
+                None,
+            )),
+        );
+        state.owned_clients.insert(
+            "beta".into(),
+            Arc::new(McpClient::new_http(
+                "beta".into(),
+                HttpConfig {
+                    url: "https://b.example/mcp".into(),
+                    headers: vec![],
+                },
+                None,
+                None,
+            )),
+        );
+        // Shared clients must not be reaped by owned teardown.
+        state.shared_clients.insert(
+            "shared".into(),
+            Arc::new(McpClient::new_http(
+                "shared".into(),
+                HttpConfig {
+                    url: "https://s.example/mcp".into(),
+                    headers: vec![],
+                },
+                None,
+                None,
+            )),
+        );
+
+        let mut reports = Vec::new();
+        state
+            .teardown_owned_for_exit(|r| reports.push(r))
+            .await;
+
+        assert!(state.owned_clients.is_empty());
+        assert_eq!(state.shared_clients.len(), 1);
+        assert!(
+            reports.last().is_some_and(|r| r.complete && r.done == 2 && r.total == 2),
+            "final report must be complete 2/2; got {reports:?}"
+        );
+        assert!(
+            reports.iter().any(|r| r.current_name.as_deref() == Some("alpha")),
+            "progress should name each server"
+        );
+        assert!(
+            reports.iter().all(|r| !r.started_by_us || r.current_name.is_none()),
+            "HTTP clients must report started_by_us=false while active"
+        );
     }
 
     // ── http_headers_match / refresh_managed_clients guard tests ─────

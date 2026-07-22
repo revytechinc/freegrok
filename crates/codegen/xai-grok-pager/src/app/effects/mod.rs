@@ -57,9 +57,97 @@ pub(crate) fn execute(
             crate::app::signal_handler::set_current_session_id(None);
             unregister_active_session_best_effort(&session_id);
         }
+        Effect::PrepareMcpExit { session_ids } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                const EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+                if session_ids.is_empty() {
+                    return TaskResult::McpExitReady;
+                }
+                let prepare = async {
+                    for sid in session_ids {
+                        let params = match serde_json::value::to_raw_value(&serde_json::json!({
+                            "sessionId": sid,
+                        })) {
+                            Ok(p) => p,
+                            Err(_) => continue,
+                        };
+                        let req = acp::ExtRequest::new("x.ai/mcp/prepare_exit", params.into());
+                        // Best-effort: method_not_found / errors still exit.
+                        let _ = acp_send(req, &tx).await;
+                    }
+                };
+                match tokio::time::timeout(EXIT_TIMEOUT, prepare).await {
+                    Ok(()) => {
+                        ulog::info("mcp prepare_exit done", None, None);
+                    }
+                    Err(_) => {
+                        ulog::warn(
+                            "mcp prepare_exit timed out; continuing quit",
+                            None,
+                            None,
+                        );
+                    }
+                }
+                TaskResult::McpExitReady
+            });
+        }
         Effect::Quit => {
             ulog::info("pager quit", None, None);
             return (true, meta);
+        }
+        Effect::ScanClaudeImport { cwd } => {
+            tasks.spawn(async move {
+                let cwd_for_result = cwd.clone();
+                let plan = tokio::task::spawn_blocking(move || {
+                    xai_grok_shell::claude_import::scan_importable_settings(&cwd)
+                })
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "Claude import scan task failed");
+                    xai_grok_shell::claude_import::ImportPlan::default()
+                });
+                TaskResult::ClaudeImportScanned {
+                    plan,
+                    cwd: cwd_for_result,
+                }
+            });
+        }
+        Effect::ApplyClaudeImport {
+            plan,
+            cwd,
+            total_in_modal,
+        } => {
+            tasks.spawn(async move {
+                let cwd_for_result = cwd.clone();
+                let outcome = tokio::task::spawn_blocking(move || {
+                    let mut summary = plan.summary(&cwd).trim_end().to_string();
+                    match xai_grok_shell::claude_import::apply_import(&plan, &cwd) {
+                        Ok(result) => {
+                            summary.push_str(&format!(
+                                "\nImported {} of {} setting(s).",
+                                result.total(),
+                                total_in_modal
+                            ));
+                            for path in &result.modified_files {
+                                summary.push_str(&format!("\n  Updated: {path}"));
+                            }
+                            (summary, None)
+                        }
+                        Err(e) => (String::new(), Some(e.to_string())),
+                    }
+                })
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "Claude import apply task failed");
+                    (String::new(), Some(format!("import task failed: {error}")))
+                });
+                TaskResult::ClaudeImportApplied {
+                    summary: outcome.0,
+                    error: outcome.1,
+                    cwd: cwd_for_result,
+                }
+            });
         }
         Effect::SetWorkingDir { path } => {
             if let Err(e) = std::env::set_current_dir(&path) {

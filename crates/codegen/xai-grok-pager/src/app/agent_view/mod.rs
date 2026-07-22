@@ -209,6 +209,58 @@ impl McpInitProgress {
         self.total > 0 || self.started_at.elapsed() < Self::SEED_EXPIRE
     }
 }
+
+/// MCP exit teardown progress (`Closing MCP connections (N/X)…`).
+///
+/// Mirrors [`McpInitProgress`] for quit: keeps the UI honest while owned
+/// clients disconnect (remote) or local processes we started are reaped.
+#[derive(Debug, Clone)]
+pub struct McpExitProgress {
+    pub total: u32,
+    pub done: u32,
+    pub current_name: Option<String>,
+    /// Whether the *current* server was started by this session (stdio).
+    pub started_by_us: bool,
+    pub complete: bool,
+    pub started_at: Instant,
+}
+impl McpExitProgress {
+    /// Max time to keep the chip if the shell never reports completion.
+    pub const MAX_VISIBLE: std::time::Duration = std::time::Duration::from_secs(15);
+
+    pub fn seed(total: u32) -> Self {
+        Self {
+            total,
+            done: 0,
+            current_name: None,
+            started_by_us: false,
+            complete: total == 0,
+            started_at: Instant::now(),
+        }
+    }
+
+    pub fn is_visible(&self) -> bool {
+        !self.complete && self.started_at.elapsed() < Self::MAX_VISIBLE
+    }
+
+    /// Status chip text: always connection-oriented so multi-tenant remotes
+    /// are not described as "stopping the service".
+    pub fn status_label(&self) -> String {
+        if self.total == 0 {
+            return "Closing MCP connections…".into();
+        }
+        let mut s = format!("Closing MCP connections ({}/{})", self.done, self.total);
+        if let Some(name) = self.current_name.as_deref() {
+            if self.started_by_us {
+                s.push_str(&format!(" · stopping {name}"));
+            } else {
+                s.push_str(&format!(" · disconnecting {name}"));
+            }
+        }
+        s.push('…');
+        s
+    }
+}
 #[cfg(test)]
 mod mcp_init_progress_tests {
     use super::McpInitProgress;
@@ -234,6 +286,38 @@ mod mcp_init_progress_tests {
                 - std::time::Duration::from_secs(1),
         };
         assert!(!expired.is_visible(), "expired seed must not be visible");
+    }
+}
+
+#[cfg(test)]
+mod mcp_exit_progress_tests {
+    use super::McpExitProgress;
+
+    #[test]
+    fn status_label_uses_connection_wording() {
+        let mut p = McpExitProgress::seed(2);
+        p.done = 1;
+        p.current_name = Some("honcho".into());
+        p.started_by_us = false;
+        let label = p.status_label();
+        assert!(
+            label.contains("Closing MCP connections (1/2)"),
+            "got {label}"
+        );
+        assert!(
+            label.contains("disconnecting honcho"),
+            "remote must say disconnecting: {label}"
+        );
+        assert!(!label.to_lowercase().contains("stopping honcho"));
+    }
+
+    #[test]
+    fn status_label_stop_local_only_when_started_by_us() {
+        let mut p = McpExitProgress::seed(1);
+        p.current_name = Some("operant".into());
+        p.started_by_us = true;
+        let label = p.status_label();
+        assert!(label.contains("stopping operant"), "got {label}");
     }
 }
 /// Current voice record-dot pulse: `(filled, brightness)`.
@@ -1235,6 +1319,10 @@ pub struct AgentView {
     /// MCP servers, cleared when `x.ai/mcp_initialized` arrives.
     /// Shown in the turn status line while the agent is idle.
     pub(crate) mcp_init_progress: Option<McpInitProgress>,
+    /// MCP exit teardown progress (`Closing MCP connections (N/X)…`).
+    /// Seeded on quit; updated by `x.ai/mcp/exit_progress`; cleared when
+    /// complete or the app leaves the TUI.
+    pub(crate) mcp_exit_progress: Option<McpExitProgress>,
     /// Last synced ACP command generation. When this differs from
     /// `session.available_commands_generation`, `sync_acp_commands()`
     /// is called on the prompt. Starts at 0 so bootstrap (generation 1)

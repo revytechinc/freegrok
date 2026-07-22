@@ -12,6 +12,12 @@ User-facing guides live with the pager package and are what ship under `~/.grok/
 |-----|----------|
 | [freebsd-port-and-jail-sandbox.md](./freebsd-port-and-jail-sandbox.md) | Port plan, platform verify, jail design (TUI-scoped), doctor CI gate, verification log |
 
+## Implementation plans
+
+| Doc | Contents |
+|-----|----------|
+| [plans/2026-07-21-path-browser-and-ssh-import.md](./plans/2026-07-21-path-browser-and-ssh-import.md) | Reusable `PathBrowserModal` (hidden dirs / `~/.ssh`), SSH form identity Browse, remote scan phases |
+
 ### Source install without ports (FreeBSD)
 
 ```sh

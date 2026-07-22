@@ -24,7 +24,11 @@ use super::dashboard::{
 };
 use super::import_claude::{
     dispatch_dismiss_claude_import, dispatch_import_claude, dispatch_import_claude_cancel,
-    dispatch_import_claude_confirm,
+    dispatch_import_claude_confirm, dispatch_import_menu_cancel, dispatch_import_menu_select,
+    dispatch_import_report_close, dispatch_open_import_menu, dispatch_open_ssh_import_form,
+    dispatch_path_browser_cancel, dispatch_path_browser_selected, dispatch_show_import_report,
+    dispatch_ssh_import_browse_identity, dispatch_ssh_import_form_cancel,
+    dispatch_ssh_import_form_submit,
 };
 use super::interject::dispatch_interject;
 use super::jump::{dispatch_jump_dismiss, dispatch_jump_picker_select, dispatch_jump_show_picker};
@@ -151,15 +155,11 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             if let Some(tx) = &app.voice_cmd_tx {
                 let _ = tx.try_send(xai_grok_voice::VoiceCommand::Shutdown);
             }
-            let mut effects = unregister_all_active_sessions(app);
-            effects.push(Effect::Quit);
-            effects
+            super::task_result::staged_quit_effects(app, unregister_all_active_sessions(app))
         }
         Action::QuitForUpdate => {
-            let mut effects = unregister_all_active_sessions(app);
             app.quit_for_update = true;
-            effects.push(Effect::Quit);
-            effects
+            super::task_result::staged_quit_effects(app, unregister_all_active_sessions(app))
         }
         Action::ResumeForeignSession => {
             let Some(hint) = app.take_foreign_resume_hint() else {
@@ -186,9 +186,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                     session_id,
                 });
             }
-            let mut effects = unregister_all_active_sessions(app);
-            effects.push(Effect::Quit);
-            effects
+            super::task_result::staged_quit_effects(app, unregister_all_active_sessions(app))
         }
         Action::NewSession => dispatch_new_session(app),
         Action::ChooseNewSessionMode => open_new_session_question(app),
@@ -201,6 +199,19 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::OpenNewWorktreeDialog => {
             app.new_worktree_dialog = Some(crate::app::app_view::NewWorktreeDialogState::new());
             vec![]
+        }
+        Action::OpenImportMenu => dispatch_open_import_menu(app),
+        Action::ImportMenuSelect(source) => dispatch_import_menu_select(app, source),
+        Action::ImportMenuCancel => dispatch_import_menu_cancel(app),
+        Action::ImportReportClose => dispatch_import_report_close(app),
+        Action::ShowImportReport { title, body } => dispatch_show_import_report(app, title, body),
+        Action::OpenSshImportForm => dispatch_open_ssh_import_form(app),
+        Action::SshImportFormCancel => dispatch_ssh_import_form_cancel(app),
+        Action::SshImportFormSubmit(values) => dispatch_ssh_import_form_submit(app, values),
+        Action::SshImportBrowseIdentity => dispatch_ssh_import_browse_identity(app),
+        Action::PathBrowserCancel => dispatch_path_browser_cancel(app),
+        Action::PathBrowserSelected { purpose, path } => {
+            dispatch_path_browser_selected(app, purpose, path)
         }
         Action::ImportClaudeSettings => dispatch_import_claude(app),
         Action::ImportClaudeConfirm => dispatch_import_claude_confirm(app),

@@ -707,6 +707,36 @@ pub(super) async fn run_session(
                     tokio::task::spawn_local(async move { let snapshot = crate
                     ::extensions::mcp::build_mcp_status(& mcp_state, & tool_bridge, Some(&
                     writer),). await; let _ = respond_to.send(snapshot); }); }
+                    SessionCommand::PrepareMcpExit { respond_to } => {
+                        let mcp_state = session.mcp_state.clone();
+                        let gateway = session.notifications.gateway.clone();
+                        let session_id = session.session_info.id.0.to_string();
+                        tokio::task::spawn_local(async move {
+                            let mut state = mcp_state.lock().await;
+                            state
+                                .teardown_owned_for_exit(|report| {
+                                    if let Ok(params) = serde_json::value::to_raw_value(
+                                        &serde_json::json!({
+                                            "total": report.total,
+                                            "done": report.done,
+                                            "currentName": report.current_name,
+                                            "startedByUs": report.started_by_us,
+                                            "complete": report.complete,
+                                            "sessionId": session_id,
+                                        }),
+                                    ) {
+                                        gateway.forward_fire_and_forget(
+                                            acp::ExtNotification::new(
+                                                crate::extensions::mcp::mcp_methods::EXIT_PROGRESS,
+                                                params.into(),
+                                            ),
+                                        );
+                                    }
+                                })
+                                .await;
+                            let _ = respond_to.send(());
+                        });
+                    }
                     SessionCommand::CallMcpTool { server_name, server_url, tool_name, arguments,
                     respond_to } => { let mcp_state = session.mcp_state.clone();
                     tokio::task::spawn_local(async move { let result = crate

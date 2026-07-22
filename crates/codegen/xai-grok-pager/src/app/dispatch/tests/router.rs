@@ -94,10 +94,23 @@ fn send_remember_note_clears_active_ephemeral_tip() {
     );
 }
 #[test]
-fn quit_returns_quit_effect() {
+fn quit_stages_mcp_prepare_then_quit() {
     let mut app = test_app();
     let effects = dispatch(Action::Quit, &mut app);
-    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::PrepareMcpExit { .. }]
+        ),
+        "first quit should stage MCP prepare_exit, got: {effects:?}"
+    );
+    assert!(app.exit_mcp_prepare_in_progress);
+    // Second quit (after prepare ready) leaves the TUI.
+    let effects = dispatch(Action::Quit, &mut app);
+    assert!(
+        matches!(effects.as_slice(), [Effect::Quit]),
+        "second quit should Effect::Quit, got: {effects:?}"
+    );
 }
 #[test]
 fn resume_foreign_session_consumes_hint_and_uses_each_tools_prompt() {
@@ -816,15 +829,19 @@ fn slash_exit_dispatches_quit() {
     let mut app = test_app_with_agent();
     let effects = dispatch(Action::SendPrompt("/exit".into()), &mut app);
     assert!(
-        effects.last().is_some_and(|e| matches!(e, Effect::Quit)),
-        "expected Quit as last effect, got: {effects:?}"
+        effects
+            .last()
+            .is_some_and(|e| matches!(e, Effect::PrepareMcpExit { .. } | Effect::Quit)),
+        "expected staged prepare_exit or Quit as last effect, got: {effects:?}"
     );
 }
 #[test]
 fn slash_quit_alias_dispatches_quit() {
     let mut app = test_app_with_agent();
     let effects = dispatch(Action::SendPrompt("/quit".into()), &mut app);
-    assert!(effects.last().is_some_and(|e| matches!(e, Effect::Quit)));
+    assert!(effects
+        .last()
+        .is_some_and(|e| matches!(e, Effect::PrepareMcpExit { .. } | Effect::Quit)));
 }
 #[test]
 fn slash_new_does_not_cancel_running_turn() {

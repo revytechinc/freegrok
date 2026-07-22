@@ -46,6 +46,51 @@ pub(super) fn handle_mcp_init_progress(notif: &acp::ExtNotification, app: &mut A
     is_active
 }
 
+/// Handle `x.ai/mcp/exit_progress` during staged quit.
+pub(super) fn handle_mcp_exit_progress(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Payload {
+        total: u32,
+        done: u32,
+        #[serde(default)]
+        current_name: Option<String>,
+        #[serde(default)]
+        started_by_us: bool,
+        #[serde(default)]
+        complete: bool,
+        #[serde(default)]
+        session_id: Option<String>,
+    }
+    let Ok(payload) = serde_json::from_str::<Payload>(notif.params.get()) else {
+        return false;
+    };
+    let Some((is_active, agent)) = mcp_target_agent(app, payload.session_id.as_deref()) else {
+        return false;
+    };
+    if payload.complete {
+        agent.mcp_exit_progress = None;
+        return is_active;
+    }
+    if let Some(ref mut progress) = agent.mcp_exit_progress {
+        progress.total = payload.total;
+        progress.done = payload.done;
+        progress.current_name = payload.current_name;
+        progress.started_by_us = payload.started_by_us;
+        progress.complete = payload.complete;
+    } else {
+        agent.mcp_exit_progress = Some(super::super::agent_view::McpExitProgress {
+            total: payload.total,
+            done: payload.done,
+            current_name: payload.current_name,
+            started_by_us: payload.started_by_us,
+            complete: payload.complete,
+            started_at: std::time::Instant::now(),
+        });
+    }
+    is_active
+}
+
 /// Handle `x.ai/mcp/tools_changed` and `x.ai/mcp_initialized`.
 ///
 /// Routing rules (verified against the four shell emit sites in

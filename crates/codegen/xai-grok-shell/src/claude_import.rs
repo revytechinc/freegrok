@@ -2244,4 +2244,171 @@ if path == &tempdir_claude)
             "cache should be populated after a call"
         );
     }
+
+    /// Full scan → apply chain against mock project Claude configs.
+    ///
+    /// Lays down realistic `.claude/settings.json`, `.mcp.json`, and a skills
+    /// dir under a temp git root, then asserts scan discovers each kind and
+    /// apply materializes them into `<root>/.grok/`.
+    #[test]
+    fn scan_and_apply_full_chain_with_mock_project_claude_configs() {
+        let root = tempfile::tempdir().unwrap();
+        git2::Repository::init(root.path()).unwrap();
+
+        let claude = root.path().join(".claude");
+        std::fs::create_dir_all(claude.join("skills")).unwrap();
+        std::fs::create_dir_all(claude.join("rules")).unwrap();
+        std::fs::write(
+            claude.join("settings.json"),
+            r#"{
+                "permissions": {
+                    "allow": ["Bash(npm test)", "Read"],
+                    "deny": ["Bash(rm -rf *)"],
+                    "ask": ["Edit"]
+                },
+                "env": {
+                    "MOCK_IMPORT_VAR": "from-claude"
+                },
+                "hooks": {
+                    "PreToolUse": [{
+                        "matcher": "Bash",
+                        "hooks": [{
+                            "type": "command",
+                            "command": "echo mock-pre-hook",
+                            "timeout": 12
+                        }]
+                    }]
+                }
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join(".mcp.json"),
+            r#"{
+                "mcpServers": {
+                    "mock-project-mcp": {
+                        "command": "npx",
+                        "args": ["-y", "mock-mcp-server"]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let plan = scan_importable_settings(root.path());
+        assert!(
+            !plan.is_empty(),
+            "mock Claude tree must produce importable items"
+        );
+        assert!(
+            plan.project_items.len() >= 5,
+            "expected perms+env+hook+mcp+path items, got {}",
+            plan.project_items.len()
+        );
+
+        let mut saw_perm = false;
+        let mut saw_env = false;
+        let mut saw_hook = false;
+        let mut saw_mcp = false;
+        let mut saw_skill_path = false;
+        let mut saw_rule_path = false;
+        for item in &plan.project_items {
+            match item {
+                ImportableItem::Permission(rule) => {
+                    saw_perm = true;
+                    let _ = rule;
+                }
+                ImportableItem::EnvVar { key, value } => {
+                    assert_eq!(key, "MOCK_IMPORT_VAR");
+                    assert_eq!(value, "from-claude");
+                    saw_env = true;
+                }
+                ImportableItem::Hook {
+                    event, command, ..
+                } => {
+                    assert_eq!(event, "PreToolUse");
+                    assert_eq!(command, "echo mock-pre-hook");
+                    saw_hook = true;
+                }
+                ImportableItem::McpServer { name, .. } => {
+                    assert_eq!(name, "mock-project-mcp");
+                    saw_mcp = true;
+                }
+                ImportableItem::PathEntry { kind, path } => match kind {
+                    PathKind::Skill => {
+                        assert!(path.contains("skills"), "skill path: {path}");
+                        saw_skill_path = true;
+                    }
+                    PathKind::Rule => {
+                        assert!(path.contains("rules"), "rule path: {path}");
+                        saw_rule_path = true;
+                    }
+                },
+            }
+        }
+        assert!(saw_perm, "missing permission items");
+        assert!(saw_env, "missing env var");
+        assert!(saw_hook, "missing hook");
+        assert!(saw_mcp, "missing mcp server");
+        assert!(saw_skill_path, "missing skills path entry");
+        assert!(saw_rule_path, "missing rules path entry");
+
+        let result = apply_import(&plan, root.path()).expect("apply_import");
+        assert!(
+            result.project_count > 0,
+            "apply must write project items, got {result:?}"
+        );
+        assert!(
+            result
+                .modified_files
+                .iter()
+                .any(|p| p.ends_with(".grok/config.toml") || p.contains(".grok/config.toml")),
+            "expected project config in modified_files: {:?}",
+            result.modified_files
+        );
+
+        let config_path = root.path().join(".grok").join("config.toml");
+        let config = std::fs::read_to_string(&config_path).expect("project config written");
+        assert!(
+            config.contains("MOCK_IMPORT_VAR") && config.contains("from-claude"),
+            "env must land in project config:\n{config}"
+        );
+        assert!(
+            config.contains("npm test") || config.contains("Bash"),
+            "permission rules must land in project config:\n{config}"
+        );
+        assert!(
+            config.contains("mock-project-mcp"),
+            "mcp server must land in project config:\n{config}"
+        );
+        assert!(
+            config.contains("extra_skill_dirs") || config.contains("skills"),
+            "skill path must land in project config:\n{config}"
+        );
+
+        let hooks_path = root
+            .path()
+            .join(".grok")
+            .join("hooks")
+            .join("imported-from-claude.json");
+        let hooks = std::fs::read_to_string(&hooks_path).expect("hooks file written");
+        assert!(
+            hooks.contains("mock-pre-hook"),
+            "hook command must be in imported hooks file:\n{hooks}"
+        );
+    }
+
+    #[test]
+    fn scan_empty_tree_returns_empty_plan() {
+        let root = tempfile::tempdir().unwrap();
+        git2::Repository::init(root.path()).unwrap();
+        let plan = scan_importable_settings(root.path());
+        // May still pick up real ~/.claude if present on the host; only assert
+        // that a clean project tree adds nothing to project_items.
+        assert!(
+            plan.project_items.is_empty(),
+            "empty project must not invent project items, got {:?}",
+            plan.project_items
+        );
+    }
 }

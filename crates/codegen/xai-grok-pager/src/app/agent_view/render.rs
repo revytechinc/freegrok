@@ -1267,7 +1267,16 @@ impl AgentView {
                 ),
             );
         }
-        if let Some(mcp_line) = self.mcp_init_progress.as_ref().and_then(|p| {
+        // Exit teardown wins over init: quit must never look frozen.
+        if let Some(mcp_line) = self.mcp_exit_progress.as_ref().and_then(|p| {
+            crate::views::agent_status::mcp_exit_status_line(
+                p,
+                self.scrollback.animation_tick(),
+                &theme,
+            )
+        }) {
+            status.push("mcp", mcp_line);
+        } else if let Some(mcp_line) = self.mcp_init_progress.as_ref().and_then(|p| {
             crate::views::agent_status::mcp_status_line(p, self.scrollback.animation_tick(), &theme)
         }) {
             status.push("mcp", mcp_line);
