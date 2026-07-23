@@ -356,35 +356,35 @@ impl ModelByok {
     }
 }
 
-/// Whether this session+model uses a refreshable session token.
+/// Whether this session+model may run OIDC / session-token **refresh** after
+/// a 401.
 ///
-/// Gates on stable inputs, not `Credentials.auth_type`: that field collapses
-/// to `ApiKey` when the session-token cache is momentarily empty and
-/// `XAI_API_KEY` is set, which demoted live OIDC sessions to non-refreshable
-/// api-key mode and 401'd every prompt until restart. `model_byok` still
-/// excludes genuine per-model BYOK, whose keys are not refreshable.
+/// Gates on stable inputs, not `Credentials.auth_type` (that field can
+/// transiently read `ApiKey` when the session cache is empty).
 ///
-/// `Unknown` (BYOK status indeterminate — config currently unparseable, no
-/// sampling config yet, or the per-model memo was cleared) must **not** demote
-/// a live session to non-refreshable api-key mode: that re-sends the stale
-/// buffered token on every turn and 401s with `bad-credentials` until restart
-/// (the stale-token regression this gate addresses; fall back rather than
-/// demote on `Unknown`). It refreshes when `endpoint_is_first_party` — the
-/// request targets a first-party host (cli-chat-proxy / first-party API),
-/// where sending the session token cannot leak to a third-party BYOK
-/// endpoint. A definite `NotByok` always refreshes (it only ever routes to
-/// the session endpoint); a definite `Byok` never does.
+/// Rules:
+/// - Non-session ACP methods → never.
+/// - Definite **Byok** (model has its own `api_key`/`env_key`) → never
+///   (refreshing the xAI JWT cannot fix a rejected LiteLLM/MiniMax key).
+/// - **NotByok** / **Unknown** → only when `endpoint_is_first_party`
+///   (cli-chat-proxy / `*.x.ai`). Third-party hosts (LiteLLM, MiniMax, local
+///   Ollama, …) must **never** trigger session refresh: that re-sends the
+///   JWT, loops 401s, and looks like a hang.
+///
+/// `Unknown` on a first-party host still refreshes so a transient config
+/// blip cannot demote a live OIDC session to a stale-token death spiral.
 pub fn session_token_auth_gate(
     is_session_based_method: bool,
     model_byok: ModelByok,
     endpoint_is_first_party: bool,
 ) -> bool {
-    is_session_based_method
-        && match model_byok {
-            ModelByok::NotByok => true,
-            ModelByok::Byok => false,
-            ModelByok::Unknown => endpoint_is_first_party,
-        }
+    if !is_session_based_method {
+        return false;
+    }
+    match model_byok {
+        ModelByok::Byok => false,
+        ModelByok::NotByok | ModelByok::Unknown => endpoint_is_first_party,
+    }
 }
 
 pub const AUTH_ERROR_SESSION_EXPIRED: &str =

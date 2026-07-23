@@ -487,6 +487,121 @@ mod tests {
         }));
     }
 
+    /// Portable multi-provider catalog shape (no operator hostnames).
+    /// Must parse fully with no warnings so config merges stay safe anywhere.
+    #[test]
+    fn multi_provider_gateway_and_minimax_catalog_parses() {
+        let cfg = parse_cfg(
+            r#"
+            [model.minimax-direct-m3]
+            model = "MiniMax-M3"
+            name = "MiniMax M3 (direct)"
+            base_url = "https://minimax.example.test/anthropic/v1"
+            api_backend = "messages"
+            auth_scheme = "x_api_key"
+            env_key = "MINIMAX_API_KEY"
+            context_window = 204800
+            extra_headers = { "anthropic-version" = "2023-06-01" }
+
+            [model.gateway-minimaxm3]
+            model = "minimaxm3"
+            name = "minimaxm3 (gateway)"
+            base_url = "https://llm-gateway.example.test/v1"
+            env_key = "LLM_GATEWAY_API_KEY"
+
+            [model.gateway-glm-colon]
+            model = "glm-5.2:cloud"
+            name = "glm colon id (gateway)"
+            base_url = "https://llm-gateway.example.test/v1"
+            env_key = "LLM_GATEWAY_API_KEY"
+
+            [model.local-openai-compat]
+            model = "local-coder"
+            name = "Local OpenAI-compat"
+            base_url = "http://127.0.0.1:9/v1"
+            "#,
+        );
+        assert!(
+            cfg.config_warnings.is_empty(),
+            "unexpected warnings: {:?}",
+            cfg.config_warnings
+        );
+        let mm = cfg
+            .config_models
+            .get("minimax-direct-m3")
+            .expect("direct minimax");
+        assert_eq!(mm.model.as_deref(), Some("MiniMax-M3"));
+        assert_eq!(
+            mm.base_url.as_deref(),
+            Some("https://minimax.example.test/anthropic/v1")
+        );
+        assert_eq!(mm.api_backend, Some(ApiBackend::Messages));
+        assert_eq!(
+            mm.auth_scheme,
+            Some(xai_grok_sampler::AuthScheme::XApiKey)
+        );
+        assert_eq!(
+            mm.env_key.as_ref().and_then(|k| k.primary()),
+            Some("MINIMAX_API_KEY")
+        );
+        assert_eq!(mm.context_window, Some(204800));
+        assert_eq!(
+            mm.extra_headers
+                .get("anthropic-version")
+                .map(|s| s.as_str()),
+            Some("2023-06-01")
+        );
+
+        let gw = cfg
+            .config_models
+            .get("gateway-minimaxm3")
+            .expect("gateway minimax");
+        assert_eq!(gw.model.as_deref(), Some("minimaxm3"));
+        assert_eq!(
+            gw.base_url.as_deref(),
+            Some("https://llm-gateway.example.test/v1")
+        );
+        assert_eq!(
+            gw.env_key.as_ref().and_then(|k| k.primary()),
+            Some("LLM_GATEWAY_API_KEY")
+        );
+        assert!(gw.api_backend.is_none() || gw.api_backend == Some(ApiBackend::ChatCompletions));
+
+        let colon = cfg
+            .config_models
+            .get("gateway-glm-colon")
+            .expect("colon model id lives in value not section");
+        assert_eq!(colon.model.as_deref(), Some("glm-5.2:cloud"));
+
+        let local = cfg
+            .config_models
+            .get("local-openai-compat")
+            .expect("local openai");
+        assert_eq!(local.model.as_deref(), Some("local-coder"));
+        assert_eq!(local.base_url.as_deref(), Some("http://127.0.0.1:9/v1"));
+        assert!(local.env_key.is_none());
+
+        assert_eq!(cfg.config_models.len(), 4);
+    }
+
+    /// Section keys stay safe; values may still carry ids with colons.
+    #[test]
+    fn model_id_value_may_contain_colon() {
+        let (models, warnings) = parse_raw(
+            r#"
+            [model.gateway-glm]
+            model = "glm-5.2:cloud"
+            base_url = "https://llm-gateway.example.test/v1"
+            env_key = "LLM_GATEWAY_API_KEY"
+            "#,
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            models.get("gateway-glm").and_then(|m| m.model.as_deref()),
+            Some("glm-5.2:cloud")
+        );
+    }
+
     #[test]
     fn unknown_field_warns_but_keeps_known_fields() {
         let (models, warnings) = parse_raw(

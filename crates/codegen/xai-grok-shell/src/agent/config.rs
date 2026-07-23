@@ -4499,10 +4499,17 @@ pub(crate) fn first_own_credential(
         .map(str::to_owned)
         .or_else(|| env_key.and_then(EnvKeys::resolve_value))
 }
-/// Priority: model api_key/env_key > cached auth-provider token > session
-/// token > XAI_API_KEY.
+/// Priority: model `api_key` / `env_key` > auth-provider token > **first-party
+/// only** session token > **first-party only** `XAI_API_KEY`.
+///
+/// **Never** send the xAI OIDC session JWT (or ambient `XAI_API_KEY`) to a
+/// third-party OpenAI-compat host (LiteLLM, MiniMax, local Ollama, etc.).
+/// Those gateways expect the model's own `api_key` (often `sk-…`). Leaking the
+/// session JWT yields 401s like "Virtual Key expected… Received=eyJ…" and a
+/// useless OIDC refresh loop that feels like a hang.
 pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> ResolvedCredentials {
     let info = model.info();
+    let first_party = crate::util::is_xai_api_url(&info.base_url);
     let (api_key, base_url, auth_type) = if let Some(key) = model.own_credential() {
         (
             Some(key),
@@ -4516,26 +4523,44 @@ pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> Res
             info.base_url.clone(),
             xai_chat_state::AuthType::ApiKey,
         )
-    } else if let Some(key) = session_key {
-        (
-            Some(key.to_owned()),
-            info.base_url.clone(),
-            xai_chat_state::AuthType::SessionToken,
-        )
-    } else if let Ok(key) = crate::agent::auth_method::read_xai_api_key_env() {
-        let url = model
-            .api_base_url
-            .clone()
-            .unwrap_or_else(|| info.base_url.clone());
-        (Some(key), url, xai_chat_state::AuthType::ApiKey)
+    } else if first_party {
+        if let Some(key) = session_key {
+            (
+                Some(key.to_owned()),
+                info.base_url.clone(),
+                xai_chat_state::AuthType::SessionToken,
+            )
+        } else if let Ok(key) = crate::agent::auth_method::read_xai_api_key_env() {
+            let url = model
+                .api_base_url
+                .clone()
+                .unwrap_or_else(|| info.base_url.clone());
+            (Some(key), url, xai_chat_state::AuthType::ApiKey)
+        } else {
+            (
+                None,
+                info.base_url.clone(),
+                xai_chat_state::AuthType::ApiKey,
+            )
+        }
     } else {
         if let Some(ref env_keys) = model.env_key
             && !env_keys.is_empty()
         {
             tracing::warn!(
-                model = % info.model, env_key = % env_keys,
-                "model has env_key configured but none of the environment variables are set — \
-                 requests will have no API key",
+                model = %info.model,
+                env_key = %env_keys,
+                base_url = %info.base_url,
+                "third-party model has env_key configured but none are set — \
+                 set api_key on [model.*] (or the env var); the xAI session \
+                 token will not be sent to this host",
+            );
+        } else if session_key.is_some() {
+            tracing::warn!(
+                model = %info.model,
+                base_url = %info.base_url,
+                "third-party model has no api_key/env_key; refusing to send \
+                 the xAI session JWT (set api_key on [model.*] in config.toml)",
             );
         }
         (
@@ -4546,7 +4571,10 @@ pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> Res
     };
     let auth_scheme = info.auth_scheme;
     tracing::debug!(
-        model = % info.model, auth_type = ? auth_type, "resolved credentials"
+        model = %info.model,
+        auth_type = ?auth_type,
+        first_party,
+        "resolved credentials"
     );
     ResolvedCredentials {
         api_key,
@@ -6322,23 +6350,60 @@ if field.as_deref() == Some("auth_provider"))
     }
     #[test]
     #[serial]
-    fn resolve_credentials_empty_env_key_falls_through_to_session() {
+    fn resolve_credentials_empty_env_key_falls_through_to_session_on_first_party() {
         use xai_chat_state::AuthType;
         use xai_grok_test_support::EnvGuard;
         let primary = "GROK_TEST_EMPTY_ENV_PRIMARY";
         let alias = "GROK_TEST_EMPTY_ENV_LC_ALIAS";
         let _primary = EnvGuard::set(primary, "");
         let _alias = EnvGuard::set(alias, "");
-        let mut model = test_model_entry("m", "https://inference.example/v1", None, None, None);
+        // Session JWT is only valid for first-party xAI hosts.
+        let mut model = test_model_entry("m", "https://api.x.ai/v1", None, None, None);
         model.env_key = Some(EnvKeys::new([primary, alias]));
         assert!(!model.has_own_credentials());
         let creds = resolve_credentials(&model, Some("session-jwt"));
         assert_eq!(creds.auth_type, AuthType::SessionToken);
         assert_eq!(creds.api_key.as_deref(), Some("session-jwt"));
     }
+
+    #[test]
+    fn resolve_credentials_never_sends_session_jwt_to_third_party() {
+        use xai_chat_state::AuthType;
+        // LiteLLM / MiniMax / local Ollama must not receive the OIDC JWT.
+        let model = test_model_entry(
+            "m",
+            "https://litellm.example.test/v1",
+            None,
+            None,
+            None,
+        );
+        let creds = resolve_credentials(&model, Some("eyJsession.jwt.token"));
+        assert_eq!(creds.auth_type, AuthType::ApiKey);
+        assert!(
+            creds.api_key.is_none(),
+            "must not attach session JWT to third-party host; got {:?}",
+            creds.api_key.as_ref().map(|k| &k[..k.len().min(12)])
+        );
+    }
+
+    #[test]
+    fn resolve_credentials_third_party_prefers_model_api_key_over_session() {
+        use xai_chat_state::AuthType;
+        let model = test_model_entry(
+            "m",
+            "https://litellm.example.test/v1",
+            Some("sk-litellm-virtual-key"),
+            None,
+            None,
+        );
+        let creds = resolve_credentials(&model, Some("eyJsession.jwt.token"));
+        assert_eq!(creds.auth_type, AuthType::ApiKey);
+        assert_eq!(creds.api_key.as_deref(), Some("sk-litellm-virtual-key"));
+    }
+
     #[test]
     #[serial]
-    fn resolve_credentials_empty_env_key_falls_through_to_global_key() {
+    fn resolve_credentials_empty_env_key_falls_through_to_global_key_on_first_party() {
         use crate::agent::auth_method::{LEGACY_XAI_API_KEY_ENV_VAR, XAI_API_KEY_ENV_VAR};
         use xai_chat_state::AuthType;
         use xai_grok_test_support::EnvGuard;
@@ -6349,7 +6414,7 @@ if field.as_deref() == Some("auth_provider"))
         let _alias = EnvGuard::set(alias, "");
         let _global = EnvGuard::set(XAI_API_KEY_ENV_VAR, sentinel);
         let _legacy = EnvGuard::unset(LEGACY_XAI_API_KEY_ENV_VAR);
-        let mut model = test_model_entry("m", "https://inference.example/v1", None, None, None);
+        let mut model = test_model_entry("m", "https://api.x.ai/v1", None, None, None);
         model.env_key = Some(EnvKeys::new([primary, alias]));
         assert!(!model.has_own_credentials());
         let creds = resolve_credentials(&model, None);
@@ -6359,7 +6424,7 @@ if field.as_deref() == Some("auth_provider"))
     #[test]
     fn resolve_credentials_empty_api_key_falls_through_to_session() {
         use xai_chat_state::AuthType;
-        let model = test_model_entry("m", "https://inference.example/v1", Some(""), None, None);
+        let model = test_model_entry("m", "https://api.x.ai/v1", Some(""), None, None);
         assert!(!model.has_own_credentials());
         let creds = resolve_credentials(&model, Some("session-jwt"));
         assert_eq!(creds.auth_type, AuthType::SessionToken);

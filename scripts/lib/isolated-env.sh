@@ -112,7 +112,9 @@ JSON
 }
 JSON
 
-	# Minimal Grok config under isolated GROK_HOME
+	# Minimal Grok config under isolated GROK_HOME, including multi-provider
+	# catalog shape. Hostnames are RFC 2606 test domains only — no operator
+	# infra. Keys are env_key names only (isolation clears real secrets).
 	mkdir -p "$GROK_ISO_GROK_HOME"
 	cat >"$GROK_ISO_GROK_HOME/config.toml" <<'TOML'
 [cli]
@@ -120,6 +122,34 @@ installer = "internal"
 
 [ui]
 permission_mode = "always-approve"
+
+# --- multi-provider catalog fixture (parse-only; portable on any machine) ---
+[model.minimax-direct-m3]
+model = "MiniMax-M3"
+name = "MiniMax M3 (direct)"
+base_url = "https://minimax.example.test/anthropic/v1"
+api_backend = "messages"
+auth_scheme = "x_api_key"
+env_key = "MINIMAX_API_KEY"
+context_window = 204800
+extra_headers = { "anthropic-version" = "2023-06-01" }
+
+[model.gateway-minimaxm3]
+model = "minimaxm3"
+name = "minimaxm3 (OpenAI-compat gateway)"
+base_url = "https://llm-gateway.example.test/v1"
+env_key = "LLM_GATEWAY_API_KEY"
+
+[model.gateway-glm-5-2-cloud]
+model = "glm-5.2:cloud"
+name = "glm-5.2 cloud (gateway)"
+base_url = "https://llm-gateway.example.test/v1"
+env_key = "LLM_GATEWAY_API_KEY"
+
+[model.local-openai-compat]
+model = "local-coder"
+name = "Local OpenAI-compat (no key)"
+base_url = "http://127.0.0.1:9/v1"
 TOML
 }
 
@@ -148,6 +178,7 @@ unset OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 unset GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_GENAI_API_KEY
 unset XAI_API_KEY GROK_CODE_XAI_API_KEY OPENROUTER_API_KEY
 unset TOGETHER_API_KEY GROQ_API_KEY DEEPSEEK_API_KEY MISTRAL_API_KEY MINIMAX_API_KEY
+unset LITELLM_API_KEY LITELLM_MASTER_KEY
 unset AWS_SECRET_ACCESS_KEY AWS_ACCESS_KEY_ID AWS_SESSION_TOKEN
 unset GH_TOKEN GITHUB_TOKEN
 export GROK_TELEMETRY_ENABLED=false

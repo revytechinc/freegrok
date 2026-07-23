@@ -152,6 +152,42 @@ if [ "$ec" -eq 0 ]; then
 	else
 		bad "import-antigravity-fixture-hit"
 	fi
+	# Multi-provider fixture config must load (doctor config.parse) and keep
+	# catalog entries visible via inspect / config export.
+	if grok_isolated_run "$GB" doctor --ci 2>/dev/null | grep -q "config.parse"; then
+		ok "multi-provider-config-parse-doctor"
+	else
+		# doctor --ci always prints config.parse on success path
+		if grok_isolated_run "$GB" doctor --ci >>"$LOG" 2>&1; then
+			ok "multi-provider-config-parse-doctor"
+		else
+			bad "multi-provider-config-parse-doctor"
+		fi
+	fi
+	if test -f "$GROK_HOME/config.toml" \
+		&& grep -q 'minimax-direct-m3' "$GROK_HOME/config.toml" \
+		&& grep -q 'gateway-minimaxm3' "$GROK_HOME/config.toml" \
+		&& grep -q 'glm-5.2:cloud' "$GROK_HOME/config.toml" \
+		&& grep -q 'example.test' "$GROK_HOME/config.toml" \
+		&& ! grep -qi 'cloudbsd' "$GROK_HOME/config.toml" \
+		&& ! grep -qE 'sk-[a-zA-Z0-9]{10,}' "$GROK_HOME/config.toml"; then
+		ok "multi-provider-fixture-config-shape"
+	else
+		bad "multi-provider-fixture-config-shape"
+	fi
+	# Offline-only validate: closed loopback port → Unreachable (exit non-zero).
+	# Proves the CLI path works without any local LLM or cloud service.
+	set +e
+	out=$(grok_isolated_run "$GB" providers validate \
+		--base-url http://127.0.0.1:1/v1 --no-hello 2>&1)
+	ec=$?
+	set -e
+	if [ "$ec" -ne 0 ] && echo "$out" | grep -qiE 'Unreachable|unreachable|TCP|connect'; then
+		ok "providers-validate-offline-unreachable"
+	else
+		echo "$out" >>"$LOG"
+		bad "providers-validate-offline-unreachable (ec=$ec)"
+	fi
 else
 	echo "SKIP providers-help (exit $ec)" | tee -a "$SUMMARY"
 	skip=$((skip + 1))

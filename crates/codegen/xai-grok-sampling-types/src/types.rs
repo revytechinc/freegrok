@@ -240,8 +240,14 @@ pub struct ChatRequestMessage {
     /// The model used for this message (typically set on assistant responses)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
-    /// The reasoning/thinking content from the model (for models that support extended thinking)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The reasoning/thinking content from the model (for models that support extended thinking).
+    /// `alias = "reasoning"` accepts Ollama OpenAI-compat / some cloud proxies that emit
+    /// `reasoning` instead of OpenAI-style `reasoning_content`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "reasoning"
+    )]
     pub reasoning_content: Option<String>,
 }
 
@@ -492,7 +498,12 @@ pub struct ChatResponseMessage {
     pub role: Role,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Accepts Ollama-style `reasoning` as well as `reasoning_content`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "reasoning"
+    )]
     pub reasoning_content: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCallResponse>,
@@ -637,6 +648,13 @@ pub struct ChatChunkDelta {
     pub role: Option<Role>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Streaming thinking. Ollama cloud OpenAI-compat emits `reasoning`;
+    /// OpenAI-style extended thinking uses `reasoning_content`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "reasoning"
+    )]
     pub reasoning_content: Option<String>,
     /// Tool call deltas. Handles `null` in JSON as empty vec.
     #[serde(
@@ -1215,6 +1233,57 @@ mod tests {
         }
         assert!(serde_json::from_str::<ReasoningEffort>("\"BOGUS\"").is_err());
         assert!(serde_json::from_str::<ReasoningEffort>("\"max\"").is_err());
+    }
+
+    /// Ollama OpenAI-compat puts thinking in `delta.reasoning` with empty `content`.
+    /// Grok must deserialize that into `reasoning_content` or turns look empty.
+    #[test]
+    fn chat_chunk_delta_accepts_ollama_reasoning_alias() {
+        let raw = json!({
+            "role": "assistant",
+            "content": "",
+            "reasoning": "The user wants pong only."
+        });
+        let delta: ChatChunkDelta = serde_json::from_value(raw).unwrap();
+        assert_eq!(delta.content.as_deref(), Some(""));
+        assert_eq!(
+            delta.reasoning_content.as_deref(),
+            Some("The user wants pong only.")
+        );
+    }
+
+    #[test]
+    fn chat_chunk_delta_accepts_reasoning_content_canonical() {
+        let raw = json!({
+            "content": "pong",
+            "reasoning_content": "step"
+        });
+        let delta: ChatChunkDelta = serde_json::from_value(raw).unwrap();
+        assert_eq!(delta.content.as_deref(), Some("pong"));
+        assert_eq!(delta.reasoning_content.as_deref(), Some("step"));
+    }
+
+    #[test]
+    fn chat_response_message_accepts_ollama_reasoning_alias() {
+        let raw = json!({
+            "role": "assistant",
+            "content": "",
+            "reasoning": "thinking text"
+        });
+        let msg: ChatResponseMessage = serde_json::from_value(raw).unwrap();
+        assert_eq!(msg.content.as_deref(), Some(""));
+        assert_eq!(msg.reasoning_content.as_deref(), Some("thinking text"));
+    }
+
+    #[test]
+    fn chat_request_message_accepts_reasoning_alias() {
+        let raw = json!({
+            "role": "assistant",
+            "content": "hi",
+            "reasoning": "why"
+        });
+        let msg: ChatRequestMessage = serde_json::from_value(raw).unwrap();
+        assert_eq!(msg.reasoning_content.as_deref(), Some("why"));
     }
 
     #[test]

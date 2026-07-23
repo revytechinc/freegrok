@@ -127,6 +127,61 @@ mod tests {
         assert_eq!(response.stop_reason, Some(StopReason::Stop));
     }
 
+    /// Ollama cloud OpenAI-compat: empty content + reasoning deltas must still
+    /// produce a non-empty stream (reasoning channel), not a silent turn.
+    #[tokio::test]
+    async fn ollama_style_reasoning_only_stream_is_not_empty() {
+        fn reasoning_chunk(thought: &str) -> ChatCompletionChunk {
+            ChatCompletionChunk {
+                id: "chunk".into(),
+                object: "chat.completion.chunk".into(),
+                created: 0,
+                model: "minimax-m2.5".into(),
+                choices: vec![ChatChunkChoice {
+                    index: 0,
+                    delta: ChatChunkDelta {
+                        role: Some(Role::Assistant),
+                        content: Some(String::new()),
+                        reasoning_content: Some(thought.to_string()),
+                        tool_calls: vec![],
+                        tool_call_id: None,
+                    },
+                    finish_reason: None,
+                }],
+                usage: None,
+                system_fingerprint: None,
+            }
+        }
+        // Wire JSON uses "reasoning"; unit path builds struct field after alias.
+        let from_wire: ChatChunkDelta = serde_json::from_value(serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "reasoning": "think step"
+        }))
+        .unwrap();
+        assert_eq!(from_wire.reasoning_content.as_deref(), Some("think step"));
+
+        let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![
+            Ok(reasoning_chunk("think ")),
+            Ok(reasoning_chunk("step")),
+            Ok(final_chunk()),
+        ];
+        let raw = stream::iter(chunks).boxed();
+        let events = stream_chat_completions(raw, None, rid(), Duration::from_secs(60));
+        let (response, _metrics) = collect_response(events)
+            .await
+            .expect("reasoning-only stream should complete");
+        // Assistant content may be empty; reasoning is a sibling ConversationItem.
+        let has_reasoning = response
+            .items
+            .iter()
+            .any(|item| matches!(item, ConversationItem::Reasoning(_)));
+        assert!(
+            has_reasoning,
+            "expected Reasoning item from ollama-style empty-content stream; response={response:?}"
+        );
+    }
+
     #[tokio::test]
     async fn failure_path_returns_error() {
         let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![

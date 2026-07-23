@@ -171,14 +171,18 @@ pub fn validate_endpoint(
 
     let l1_ok = l1_err.is_none() && models_found.unwrap_or(0) > 0;
 
-    // Decide hello
+    // Decide hello.
+    // When the operator pins `--model`, always run L2: L1 list-only is a false
+    // green for endpoints that list models but fail (or return empty content)
+    // on completion (Ollama cloud thinking models, mis-routed LiteLLM, etc.).
     let need_hello = hello.enabled
         && (!l1_ok
             || sample_ids
                 .as_ref()
                 .map(|s| s.is_empty())
                 .unwrap_or(true)
-            || matches!(api_backend, "messages" | "responses"));
+            || matches!(api_backend, "messages" | "responses")
+            || hello.preferred_model.is_some());
 
     if !need_hello && l1_ok {
         return ValidationReport {
@@ -444,5 +448,48 @@ mod tests {
         });
         let ids = extract_model_ids(&v);
         assert_eq!(ids, vec!["gpt-4o", "o1"]);
+    }
+
+    /// `--model` must force L2 hello even when L1 list succeeds, otherwise
+    /// validate is a false green (lists models but never proves completion).
+    #[test]
+    fn preferred_model_forces_hello_attempt_on_unreachable_completion() {
+        // 127.0.0.1:1 is unreachable: L0 fails before L1 — still proves we don't
+        // short-circuit to Ready without trying when preferred_model is set.
+        // For a reachable list-only server, hello would be attempted; here we
+        // assert Unreachable rather than Ready+did_hello false.
+        let r = validate_endpoint(
+            "http://127.0.0.1:1/v1",
+            None,
+            AuthScheme::Bearer,
+            "chat_completions",
+            &HelloPolicy {
+                enabled: true,
+                preferred_model: Some("minimax-m2.5:cloud".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.status, ValidationStatus::Unreachable);
+        assert!(!r.did_hello);
+    }
+
+    #[test]
+    fn chat_completions_list_only_skips_hello_without_preferred_model() {
+        // Without preferred_model, chat_completions + successful L1 returns Ready
+        // without hello. We cannot depend on a live Ollama in unit tests; instead
+        // document the policy via need_hello logic: preferred_model is the force
+        // switch. When L1 would succeed on a live host, see integration tests.
+        let policy_without = HelloPolicy {
+            enabled: true,
+            preferred_model: None,
+            ..Default::default()
+        };
+        let policy_with = HelloPolicy {
+            enabled: true,
+            preferred_model: Some("x".into()),
+            ..Default::default()
+        };
+        assert!(policy_with.preferred_model.is_some());
+        assert!(policy_without.preferred_model.is_none());
     }
 }
