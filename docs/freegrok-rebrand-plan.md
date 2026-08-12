@@ -36,7 +36,7 @@ Lock these before coding. Adjust only with an explicit plan revision.
 | CLI help / clap name | `grok` / “Grok Build” | **`freegrok`** / “FreeGrok” |
 | Version line | `grok 1.0.1 (rev) [channel]` | **`freegrok 1.0.1 (rev) [channel]`** |
 | Docs title | Grok Build | FreeGrok |
-| Doctor binary brand | frebsd-elf + path | same checks; path must end with freegrok* |
+| Doctor binary brand | freebsd-elf + path | same checks; path must end with freegrok* |
 
 ### 2.2 Installed binaries (FreeBSD / make install / Linux packages)
 

@@ -60,8 +60,12 @@ run static_exists test -x /usr/local/bin/grok-build-static
 run alias_exists test -e /usr/local/bin/grok
 run elf file /usr/local/bin/grok-build | grep -qi FreeBSD
 run version grok-build --version >/dev/null
-run doctor_ci grok-build doctor --ci >"$DOC"
-run doctor_exit test $? -eq 0
+# Capture stdout only after a successful doctor --ci (exit 0).
+if grok-build doctor --ci >"$DOC"; then
+	ok doctor_ci
+else
+	bad doctor_ci
+fi
 run backend_jail grep -q "Sandbox backend: jail" "$DOC"
 if grep -E "Sandbox backend: nono-" "$DOC" >/dev/null 2>&1; then
 	bad no_nono_backend
