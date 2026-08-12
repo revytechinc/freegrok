@@ -12,7 +12,11 @@
 //! cargo test -p xai-grok-sandbox --test read_write_trailing_glob_e2e -- --nocapture
 //! ```
 
-#![cfg(all(unix, feature = "enforce"))]
+#![cfg(all(
+    unix,
+    feature = "enforce",
+    any(target_os = "linux", target_os = "macos")
+))]
 
 use std::fs;
 use std::path::PathBuf;
