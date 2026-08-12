@@ -58,6 +58,7 @@ run pkg_which pkg which /usr/local/bin/grok-build | grep -q grok-build
 run bin_exists test -x /usr/local/bin/grok-build
 run static_exists test -x /usr/local/bin/grok-build-static
 run alias_exists test -e /usr/local/bin/grok
+run helper_libexec test -x /usr/local/libexec/grok-jail-helper
 run elf file /usr/local/bin/grok-build | grep -qi FreeBSD
 run version grok-build --version >/dev/null
 # Capture stdout only after a successful doctor --ci (exit 0).

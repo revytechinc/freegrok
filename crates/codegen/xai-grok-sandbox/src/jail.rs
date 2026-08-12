@@ -21,6 +21,11 @@ pub const JAIL_HELPER_ENV: &str = "GROK_JAIL_HELPER";
 
 /// Default helper basenames searched on `PATH`.
 const DEFAULT_HELPER_NAMES: &[&str] = &["grok-jail-helper", "xai-grok-jail-helper"];
+/// Packaged location (not setuid).
+const LIBEXEC_HELPERS: &[&str] = &[
+    "/usr/local/libexec/grok-jail-helper",
+    "/usr/local/libexec/xai-grok-jail-helper",
+];
 
 /// Whether this process is already inside a grok jail (or any FreeBSD jail).
 ///
@@ -73,6 +78,12 @@ pub fn resolve_jail_helper() -> Option<PathBuf> {
     for name in DEFAULT_HELPER_NAMES {
         if let Ok(path) = which(name) {
             return Some(path);
+        }
+    }
+    for path in LIBEXEC_HELPERS {
+        let pb = PathBuf::from(path);
+        if pb.is_file() {
+            return Some(pb);
         }
     }
     None
@@ -151,11 +162,41 @@ pub fn jail_reexec_for_profile(
     if resolve_jail_helper().is_none() {
         return None;
     }
-    // Until deny planning is shared with the helper, pass empty deny lists.
-    // The helper can still create a basic jail around the process; profile
-    // denies are Phase 2 follow-up.
-    let _ = (profile, workspace);
-    jail_reexec_command(&[], &[])
+    let (deny_write, deny_read) = jail_deny_paths(profile, workspace);
+    let write_refs: Vec<&str> = deny_write.iter().map(String::as_str).collect();
+    let read_refs: Vec<&str> = deny_read.iter().map(String::as_str).collect();
+    jail_reexec_command(&write_refs, &read_refs)
+}
+
+/// Exact deny paths for the helper. Globs are not expanded on FreeBSD
+/// (no landlock walk); they are logged and skipped so we never claim
+/// coverage we do not have.
+fn jail_deny_paths(profile: &crate::ProfileName, workspace: &Path) -> (Vec<String>, Vec<String>) {
+    let config = crate::profiles::load_sandbox_config(workspace);
+    let deny_write = if crate::is_devbox_based(profile, &config) {
+        vec!["/data".to_string()]
+    } else {
+        Vec::new()
+    };
+    if *profile == crate::ProfileName::Off {
+        return (deny_write, Vec::new());
+    }
+    let resolved = match profile.resolve_profile(workspace, &config) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "jail profile resolve failed; exact denies empty");
+            return (deny_write, Vec::new());
+        }
+    };
+    let (exact, globs) = crate::deny::partition_deny_entries(&resolved.deny);
+    if !globs.is_empty() {
+        tracing::warn!(
+            count = globs.len(),
+            "FreeBSD jail helper does not expand deny globs; only exact paths are passed"
+        );
+    }
+    let deny_read = crate::deny::exact_deny_path_strings(workspace, &exact);
+    (deny_write, deny_read)
 }
 
 /// Human-readable status for probes / diagnostics (not a public API surface

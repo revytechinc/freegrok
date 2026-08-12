@@ -69,3 +69,8 @@ regex = { workspace = true }
 [[example]]
 name = "sandbox_smoke_test"
 required-features = ["enforce"]
+
+# Packaged to /usr/local/libexec (never setuid). Dry-run by default.
+[[bin]]
+name = "grok-jail-helper"
+path = "src/bin/grok-jail-helper.rs"
