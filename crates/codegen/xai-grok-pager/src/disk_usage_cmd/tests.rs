@@ -17,7 +17,7 @@ fn measured(path: &Path) -> Option<u64> {
 /// `st_blocks` unit. Physical-size assertions need incompressible payloads.
 fn incompressible(n: usize) -> Vec<u8> {
     (0..n)
-        .map(|i| (i.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u8)
+        .map(|i: usize| (i.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u8)
         .collect()
 }
 

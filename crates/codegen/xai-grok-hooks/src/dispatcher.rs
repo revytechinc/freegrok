@@ -801,6 +801,9 @@ mod tests {
     fn stop_spec(name: &str, script: &str) -> HookSpec {
         let mut spec = make_command_spec(name, None, true, script);
         spec.event = HookEventName::Stop;
+        // Under a loaded cargo matrix, spawning `sh -c` can exceed 5s and
+        // drop a block. The timeout tests set their own shorter budget.
+        spec.timeout_ms = 30_000;
         spec
     }
 

@@ -101,7 +101,7 @@ fn a_root_off_the_anchor_is_measured_by_nobody() {
     std::fs::create_dir_all(&worktree).unwrap();
     // ZFS compresses a run of identical bytes to one 512-byte `st_blocks` unit.
     let payload: Vec<u8> = (0..65536)
-        .map(|i| (i.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u8)
+        .map(|i: usize| (i.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u8)
         .collect();
     std::fs::write(worktree.join("payload.bin"), payload).unwrap();
     let elsewhere = Volume::of(tmp.path()).other_device_for_test();
