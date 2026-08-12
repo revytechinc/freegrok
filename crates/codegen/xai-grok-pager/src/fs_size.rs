@@ -274,7 +274,15 @@ pub(crate) fn physical_file_size(meta: &Metadata) -> u64 {
         use std::os::unix::fs::MetadataExt;
         // POSIX leaves the unit unspecified; Linux and macOS use S_BLKSIZE.
         const ST_BLOCKS_UNIT: u64 = 512;
-        meta.blocks().saturating_mul(ST_BLOCKS_UNIT)
+        let physical = meta.blocks().saturating_mul(ST_BLOCKS_UNIT);
+        // FreeBSD ZFS commonly reports st_blocks=1 for newly written files
+        // (zroot/tmp and zroot/home, even after fsync + sync). That would make
+        // every fresh file look like 512 bytes. Prefer logical size then.
+        #[cfg(target_os = "freebsd")]
+        if meta.is_file() && physical <= ST_BLOCKS_UNIT && meta.len() > physical {
+            return meta.len();
+        }
+        physical
     }
     #[cfg(not(unix))]
     {
