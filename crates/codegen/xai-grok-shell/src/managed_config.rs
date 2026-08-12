@@ -137,6 +137,12 @@ fn team_principal_signed_in() -> std::io::Result<bool> {
 /// configured and no team signed in (logout). A configured deployment key keeps
 /// its files (original "never auto-deletes" behavior). Runs at startup and on
 /// logout; best-effort.
+///
+/// **fail_closed:** when the marker or on-disk requirements opt in to fail-closed
+/// (or requirements exist but are unreadable), do **not** wipe. A personal/User
+/// principal (or signed-out auth) must not escape enforced policy by swapping
+/// `auth.json` and letting orphan clear delete the artifacts. Non-fail-closed
+/// team policy still clears on logout as before.
 pub fn clear_orphan() {
     if resolve_deployment_key().is_some() {
         return;
@@ -153,6 +159,12 @@ pub fn clear_orphan() {
     let Some(_lock) = try_lock_managed_config(&home) else {
         return; // another process is syncing; retry next call
     };
+    if xai_grok_config::fail_closed_policy_armed_at(&home) {
+        tracing::info!(
+            "keeping fail_closed managed policy on disk; no team principal present to own a clear"
+        );
+        return;
+    }
     remove_managed_config_files(&home);
 }
 
@@ -892,23 +904,45 @@ fn current_serving_identity_any_expiry() -> crate::config::ServingIdentity {
     serving_identity_from(active_team_id_any_expiry())
 }
 
+/// Disk-only classification for the startup `auth_mode` label.
+pub fn classify_auth_mode() -> xai_grok_telemetry::startup::AuthMode {
+    auth_mode(
+        resolve_deployment_key().is_some(),
+        &team_principal_signed_in(),
+    )
+}
+
+fn auth_mode(
+    has_deployment_key: bool,
+    signed_in_team: &std::io::Result<bool>,
+) -> xai_grok_telemetry::startup::AuthMode {
+    use xai_grok_telemetry::startup::AuthMode;
+    match (has_deployment_key, signed_in_team) {
+        (true, _) => AuthMode::Deployment,
+        (false, Ok(true)) => AuthMode::Team,
+        (false, Ok(false)) => AuthMode::Personal,
+        (false, Err(_)) => AuthMode::Unknown,
+    }
+}
+
 /// Best-effort session-start refresh: a bounded token refresh, then a bounded refetch only when the cache is
 /// hard-stale. NEVER fails the session — on failure it continues on cached / OS-protected policy.
 pub async fn ensure_managed_policy_present(
     auth_manager: &std::sync::Arc<crate::auth::AuthManager>,
 ) {
+    xai_grok_telemetry::startup::enter(xai_grok_telemetry::startup::StartupPhase::ManagedPolicy);
+    // Classify before the fetch gate: the label is disk-only and fetch-disabled
+    // users still deserve a real auth_mode split.
+    let has_deployment_key = resolve_deployment_key().is_some();
+    let signed_in_team = team_principal_signed_in();
+    xai_grok_telemetry::startup::set_auth_mode(auth_mode(has_deployment_key, &signed_in_team));
     // Gated on fetch-enabled, not `cfg!(test)` — that would diverge test behavior from production.
     if !is_fetch_enabled() {
         return;
     }
-    // Cheap disk-only gates before any network token refresh, so the boot path doesn't pay
-    // an `auth()` in the common cases. A personal user (no deploy key, and no team in
-    // `auth.json` even ignoring expiry) skips entirely; a usable identity whose cache isn't
-    // hard-stale also skips. Only an expired-but-refreshable team token (identity reads
-    // `None` before the refresh) or a hard-stale cache falls through to `auth()` below.
-    // `auth.json` unreadable (`Err`) is NOT treated as "no principal" — that would skip
-    // enforcement on a transient read blip.
-    if resolve_deployment_key().is_none() && matches!(team_principal_signed_in(), Ok(false)) {
+    // Disk-only gates first; `Err` reading `auth.json` is not "no principal",
+    // which would skip enforcement on a transient read blip.
+    if !has_deployment_key && matches!(&signed_in_team, Ok(false)) {
         return;
     }
     let identity = current_serving_identity();

@@ -53,7 +53,7 @@ impl std::fmt::Display for Scope {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InspectReport {
+pub(crate) struct InspectReport {
     pub grok_version: String,
     pub channel: String,
     pub cwd: String,
@@ -73,14 +73,16 @@ pub struct InspectReport {
     pub lsp_servers: Vec<LspServerEntry>,
     pub config_sources: ConfigSources,
     pub external_compat: ExternalCompatReport,
-    /// Warnings from `[model.*]` and `[auth_provider.*]` parsing.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub config_warnings: Vec<crate::agent::config_model_override_parse::ConfigWarning>,
+    /// Invalid or ignored `[mcp_servers.*]` entries.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mcp_config_problems: Vec<crate::util::config::McpServerConfigProblem>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InstructionFile {
+pub(crate) struct InstructionFile {
     pub path: String,
     pub scope: Scope,
     pub file_type: String,
@@ -98,7 +100,7 @@ pub struct InstructionFile {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PermissionsReport {
+pub(crate) struct PermissionsReport {
     pub sources: Vec<String>,
     pub loaded: usize,
     pub skipped: Vec<SkippedRule>,
@@ -122,7 +124,7 @@ pub struct PermissionsReport {
 /// derives its line from these fields (see `enforced_label`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EnforcedPolicy {
+pub(crate) struct EnforcedPolicy {
     /// Stable key: "alwaysApprove" | "telemetry" | "feedback".
     pub setting: String,
     /// The enforced value.
@@ -133,7 +135,7 @@ pub struct EnforcedPolicy {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SkippedRule {
+pub(crate) struct SkippedRule {
     pub rule: String,
     pub reason: String,
 }
@@ -143,7 +145,7 @@ pub struct SkippedRule {
 /// The team pin is admin policy, not a secret, so it is shown verbatim.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LoginPolicyReport {
+pub(crate) struct LoginPolicyReport {
     /// Raw `disable_api_key_auth` knob (env `GROK_DISABLE_API_KEY_AUTH`).
     pub disable_api_key_auth: Option<bool>,
     /// Configured team pin: single string, list, or null when unset.
@@ -154,7 +156,7 @@ pub struct LoginPolicyReport {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HookEntry {
+pub(crate) struct HookEntry {
     pub event: String,
     pub hook_type: String,
     pub target: String,
@@ -171,7 +173,7 @@ pub struct HookEntry {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SkillEntry {
+pub(crate) struct SkillEntry {
     pub name: String,
     pub description: String,
     pub source: ConfigSource,
@@ -184,11 +186,18 @@ pub struct SkillEntry {
     pub disabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compatibility_status: Option<CompatEntryStatus>,
+    /// Bare name this skill lost (`login`, `commit`, …).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collides_with: Option<String>,
+    /// Qualified invocation when [`Self::collides_with`] is set. Absent when
+    /// that name is contested too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invocable_as: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentEntry {
+pub(crate) struct AgentEntry {
     pub name: String,
     pub description: String,
     pub source: ConfigSource,
@@ -215,7 +224,7 @@ pub struct PluginProvides {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MarketplaceEntry {
+pub(crate) struct MarketplaceEntry {
     pub name: String,
     pub path: String,
     pub enabled_plugins: usize,
@@ -241,7 +250,7 @@ pub struct McpServerEntry {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LspServerEntry {
+pub(crate) struct LspServerEntry {
     pub name: String,
     pub command: String,
     pub args: Vec<String>,
@@ -254,7 +263,7 @@ pub struct LspServerEntry {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConfigSources {
+pub(crate) struct ConfigSources {
     /// Config layers (system + user managed, user + system requirements, user
     /// config.toml, the macOS MDM managed-preferences layer, and project
     /// .grok/config.toml files). Driven from the same resolvers used at runtime
@@ -267,7 +276,7 @@ pub struct ConfigSources {
 /// A single config layer entry for `grok inspect`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConfigLayer {
+pub(crate) struct ConfigLayer {
     /// Logical role of the layer: "system-managed", "managed", "user",
     /// "system-requirements", "requirements", "mdm", or "project".
     pub role: String,
@@ -349,7 +358,7 @@ async fn build_report(cwd: &Path) -> InspectReport {
     // Discover with all vendors ON so inspect shows the full set on disk.
     let (mut instructions, permissions, mut skills) = tokio::join!(
         list_instructions(cwd),
-        list_permissions(cwd),
+        list_permissions(cwd, project_trusted),
         list_skills(cwd, &plugin_registry, &skills_config),
     );
 
@@ -383,6 +392,7 @@ async fn build_report(cwd: &Path) -> InspectReport {
         .as_ref()
         .map(|c| c.config_warnings.clone())
         .unwrap_or_default();
+    let mcp_config_problems = crate::util::config::load_mcp_server_problems_with_project(cwd);
 
     InspectReport {
         grok_version: xai_grok_version::VERSION.to_string(),
@@ -405,6 +415,7 @@ async fn build_report(cwd: &Path) -> InspectReport {
         config_sources: configs,
         external_compat,
         config_warnings,
+        mcp_config_problems,
     }
 }
 
@@ -521,7 +532,7 @@ async fn list_instructions(cwd: &Path) -> Vec<InstructionFile> {
     // have this limitation; rules need the same treatment in a follow-up.
     let extra_rule_prefixes: Vec<std::path::PathBuf> = extra_rule_dirs
         .iter()
-        .map(|d| crate::claude_import::expand_home(d))
+        .map(|d| crate::util::expand_home(d))
         .collect();
 
     configs
@@ -548,7 +559,7 @@ async fn list_instructions(cwd: &Path) -> Vec<InstructionFile> {
 
 /// Calls the production permission resolver (`resolve_permissions_with_provenance`)
 /// which handles both Grok TOML and vendor settings fallback in one codepath.
-async fn list_permissions(cwd: &Path) -> PermissionsReport {
+async fn list_permissions(cwd: &Path, project_trusted: bool) -> PermissionsReport {
     use xai_grok_workspace::permission::resolution;
 
     let ms = resolution::managed_settings();
@@ -603,7 +614,9 @@ async fn list_permissions(cwd: &Path) -> PermissionsReport {
         }
     }
 
-    let Some(resolved) = resolution::resolve_permissions_with_provenance(cwd).await else {
+    let Some(resolved) =
+        resolution::resolve_permissions_with_provenance(cwd, project_trusted).await
+    else {
         return PermissionsReport {
             sources: vec![],
             loaded: 0,
@@ -663,36 +676,42 @@ fn list_hooks(
     discovered_plugins: &[xai_grok_agent::plugins::DiscoveredPlugin],
 ) -> Vec<HookEntry> {
     let all_on = xai_grok_tools::types::compat::CompatConfig::default();
-    let source_paths = crate::util::hooks::discover_hook_source_paths(git_root, &all_on);
-    let (global_sources, project_sources) = source_paths.as_sources(project_trusted);
-
+    // Route through the same assembly as session startup so config-layer hooks
+    // (config.toml / managed_config.toml / requirements.toml) appear in `/hooks`
+    // status alongside file hooks, each carrying its provenance name prefix.
+    let config_layers = xai_grok_config::hook_config_layers();
     let (registry, _errors) =
-        xai_grok_hooks::discovery::load_hooks_from_sources(&global_sources, &project_sources);
-
-    let home_dir = dirs::home_dir();
-    let grok_home = xai_grok_config::grok_home();
+        crate::util::hooks::assemble_hooks(&config_layers, git_root, &all_on, project_trusted);
 
     let mut entries: Vec<HookEntry> = registry
         .all_hooks()
         .into_iter()
         .map(|h| {
-            let is_user_scope = h.source_dir.starts_with(&grok_home)
-                || home_dir.as_deref().is_some_and(|home| {
-                    h.source_dir.starts_with(home.join(".cursor"))
-                        || h.source_dir.starts_with(home.join(".claude"))
-                });
-            let source = if is_user_scope {
-                ConfigSource::User {
-                    path: h.source_dir.clone(),
-                }
-            } else {
-                ConfigSource::Project {
-                    path: h.source_dir.clone(),
-                }
+            // Classify via the shared `hook_origin` (typed provenance + file-tier
+            // name prefix), the same classifier telemetry uses, so admin/system
+            // hooks aren't mislabeled and the two surfaces can't diverge.
+            use xai_grok_hooks::config::HookOrigin as O;
+            // Config-layer hooks store the layer's directory in `source_dir`;
+            // rejoin the tier's filename so inspect shows the actual config file.
+            let config_file = |name: &str| h.source_dir.join(name);
+            let path = h.source_dir.clone();
+            let source = match xai_grok_hooks::config::hook_origin(h) {
+                O::SystemManaged | O::Managed => ConfigSource::Managed {
+                    path: Some(config_file(xai_grok_config::MANAGED_CONFIG_FILENAME)),
+                },
+                O::Requirements => ConfigSource::Managed {
+                    path: Some(config_file(xai_grok_config::REQUIREMENTS_FILENAME)),
+                },
+                O::UserConfig => ConfigSource::ConfigToml {
+                    path: config_file(xai_grok_config::USER_CONFIG_FILENAME),
+                },
+                O::ProjectFile => ConfigSource::Project { path },
+                // File/plugin/agent/unknown hooks are user-scoped for display.
+                O::UserFile | O::Plugin | O::Agent | O::Unknown => ConfigSource::User { path },
             };
             let vendor = derive_vendor(&h.source_dir.display().to_string()).map(String::from);
             HookEntry {
-                event: format!("{:?}", h.event),
+                event: h.event.to_string(),
                 hook_type: h.handler_type.as_str().to_string(),
                 target: h
                     .command
@@ -760,12 +779,13 @@ async fn list_skills(
     )
     .await;
 
-    let grok_home = crate::util::grok_home::grok_home();
+    let name_counts = slash_name_counts(&skills);
     skills
         .into_iter()
         .map(|s| {
-            let source = skill_entry_source(&s, &grok_home);
+            let source = skill_entry_source(&s);
             let vendor = derive_vendor(&s.path).map(String::from);
+            let (collides_with, invocable_as) = slash_collision(&s, &name_counts);
             SkillEntry {
                 name: s.label().to_string(),
                 description: s.description,
@@ -775,30 +795,56 @@ async fn list_skills(
                 // Preserve `[skills].disabled`; compatibility is applied later.
                 disabled: !s.enabled,
                 compatibility_status: None,
+                collides_with,
+                invocable_as,
             }
         })
         .collect()
 }
 
+fn slash_name_counts(
+    skills: &[xai_grok_agent::prompt::skills::SkillInfo],
+) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for skill in skills.iter().filter(|s| s.user_invocable && s.enabled) {
+        *counts.entry(skill.name.to_lowercase()).or_default() += 1;
+        *counts
+            .entry(
+                xai_grok_tools::implementations::skills::skill::format_skill_name(skill)
+                    .to_lowercase(),
+            )
+            .or_default() += 1;
+    }
+    counts
+}
+
+fn slash_collision(
+    skill: &xai_grok_agent::prompt::skills::SkillInfo,
+    name_counts: &HashMap<String, usize>,
+) -> (Option<String>, Option<String>) {
+    if !skill.user_invocable || !skill.enabled {
+        return (None, None);
+    }
+    let name_key = skill.name.to_lowercase();
+    let contested = crate::session::slash_commands::is_reserved_slash_name(&skill.name)
+        || name_counts.get(&name_key).is_some_and(|n| *n > 1);
+    if !contested {
+        return (None, None);
+    }
+    let qualified =
+        xai_grok_tools::implementations::skills::skill::format_skill_name(skill).to_lowercase();
+    let invocable_as = name_counts
+        .get(&qualified)
+        .is_some_and(|n| *n == 1)
+        .then_some(qualified);
+    (Some(skill.name.clone()), invocable_as)
+}
+
 /// Resolve the inspect-facing source for a discovered skill.
 ///
 /// Prefers the discovery-stamped `config_source` (plugin skills,
-/// `[skills].paths` entries), then falls back to a scope mapping. One
-/// display-only fixup: bundled skills are extracted to
-/// `<grok_home>/skills/<name>/SKILL.md` and discovered as user skills, so a
-/// skill at exactly that path with a bundled name is re-labeled `Bundled`
-/// (`builtin::is_extracted_bundled_skill`) — a same-named skill anywhere else
-/// stays non-bundled. Runtime discovery scopes/precedence are untouched.
-///
-/// `Bundled`/`Server` sources are constructed only here, never by runtime
-/// discovery: deployed pagers parse `x.ai/skills/list` into a typed
-/// `ConfigSource` and reject unknown tags, so runtime stamping must wait
-/// until clients without these variants have aged out. Until then this
-/// mapping is the single owner of the scope→source translation.
-fn skill_entry_source(
-    s: &xai_grok_agent::prompt::skills::SkillInfo,
-    grok_home: &Path,
-) -> ConfigSource {
+/// `[skills].paths` entries), then falls back to the discovered scope.
+fn skill_entry_source(s: &xai_grok_agent::prompt::skills::SkillInfo) -> ConfigSource {
     use xai_grok_tools::implementations::skills::types::SkillScope;
 
     if let Some(source) = s.config_source.clone() {
@@ -807,13 +853,7 @@ fn skill_entry_source(
     let path = PathBuf::from(&s.path);
     match s.scope {
         SkillScope::Local | SkillScope::Repo => ConfigSource::Project { path },
-        SkillScope::User => {
-            if crate::builtin::is_extracted_bundled_skill(&s.name, &path, grok_home) {
-                ConfigSource::Bundled { path }
-            } else {
-                ConfigSource::User { path }
-            }
-        }
+        SkillScope::User => ConfigSource::User { path },
         SkillScope::Server => ConfigSource::Server { path },
         SkillScope::Bundled => ConfigSource::Bundled { path },
         SkillScope::Plugin => ConfigSource::Plugin {
@@ -1241,9 +1281,6 @@ fn disabled_compat_tags(
     }
 }
 
-/// Renders the "Config Warnings" section of the human report; empty when
-/// there are no warnings. Covers `[model.*]` overrides and the
-/// `[auth_provider.*]` tables, which share the same warning channel.
 fn render_config_warnings(
     warnings: &[crate::agent::config_model_override_parse::ConfigWarning],
 ) -> String {
@@ -1262,6 +1299,25 @@ fn render_config_warnings(
             w.target.label(),
             w.reason
         );
+    }
+    out
+}
+
+fn render_mcp_config_problems(problems: &[crate::util::config::McpServerConfigProblem]) -> String {
+    use crate::util::config::McpServerProblemSeverity;
+    use std::fmt::Write as _;
+
+    if problems.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n  MCP Config Problems\n");
+    let _ = writeln!(out, "  {TREE} {} problem(s)", problems.len());
+    for p in problems {
+        let severity = match p.severity {
+            McpServerProblemSeverity::Error => "error",
+            McpServerProblemSeverity::Warning => "warning",
+        };
+        let _ = writeln!(out, "    {TREE} [{severity}] {}", p.message);
     }
     out
 }
@@ -1388,11 +1444,21 @@ fn print_human(r: &InspectReport) {
         |s| s.name.clone(),
         |s| {
             let status = disabled_compat_tags(s.disabled, s.compatibility_status);
+            let collision = match (&s.collides_with, &s.invocable_as) {
+                (Some(contested), Some(invocable)) => {
+                    format!(" [collides with /{contested} → /{invocable}]")
+                }
+                (Some(contested), None) => {
+                    format!(" [collides with /{contested} — not invocable]")
+                }
+                _ => String::new(),
+            };
             format!(
-                "{}{}{}",
+                "{}{}{}{}",
                 s.source.display_label(),
                 vendor_tag(&s.vendor),
                 status,
+                collision,
             )
         },
     );
@@ -1537,6 +1603,7 @@ fn print_human(r: &InspectReport) {
     }
 
     print!("{}", render_config_warnings(&r.config_warnings));
+    print!("{}", render_mcp_config_problems(&r.mcp_config_problems));
 
     print!("{}", render_harness_compatibility(&r.external_compat));
 }
@@ -1930,25 +1997,20 @@ mod tests {
 
     #[test]
     fn skill_entry_source_maps_scopes() {
-        let home = Path::new("/home/u/.grok");
-
         let s = skill_fixture("a", "/repo/.grok/skills/a/SKILL.md", SkillScope::Local);
         assert!(matches!(
-            skill_entry_source(&s, home),
+            skill_entry_source(&s),
             ConfigSource::Project { .. }
         ));
 
         let s = skill_fixture("b", "/repo/.grok/skills/b/SKILL.md", SkillScope::Repo);
         assert!(matches!(
-            skill_entry_source(&s, home),
+            skill_entry_source(&s),
             ConfigSource::Project { .. }
         ));
 
         let s = skill_fixture("c", "/home/u/.grok/skills/c/SKILL.md", SkillScope::User);
-        assert!(matches!(
-            skill_entry_source(&s, home),
-            ConfigSource::User { .. }
-        ));
+        assert!(matches!(skill_entry_source(&s), ConfigSource::User { .. }));
 
         let s = skill_fixture(
             "d",
@@ -1956,87 +2018,103 @@ mod tests {
             SkillScope::Server,
         );
         assert!(matches!(
-            skill_entry_source(&s, home),
+            skill_entry_source(&s),
             ConfigSource::Server { .. }
         ));
 
         let s = skill_fixture("e", "/home/u/.grok/bundled/e/SKILL.md", SkillScope::Bundled);
         assert!(matches!(
-            skill_entry_source(&s, home),
+            skill_entry_source(&s),
             ConfigSource::Bundled { .. }
         ));
     }
 
-    /// Bundled skills are re-labeled `Bundled` only at their exact extraction
-    /// path `<grok_home>/skills/<name>/SKILL.md`; a same-named skill anywhere
-    /// else keeps its real source.
+    fn blank_skill_entry(skill: &SkillInfo) -> SkillEntry {
+        SkillEntry {
+            name: skill.label().to_string(),
+            description: skill.description.clone(),
+            source: ConfigSource::User {
+                path: PathBuf::from(&skill.path),
+            },
+            user_invocable: skill.user_invocable,
+            vendor: None,
+            disabled: !skill.enabled,
+            compatibility_status: None,
+            collides_with: None,
+            invocable_as: None,
+        }
+    }
+
+    fn collision_entry(skill: &SkillInfo, all: &[SkillInfo]) -> SkillEntry {
+        let mut entry = blank_skill_entry(skill);
+        let (collides_with, invocable_as) = slash_collision(skill, &slash_name_counts(all));
+        entry.collides_with = collides_with;
+        entry.invocable_as = invocable_as;
+        entry
+    }
+
     #[test]
-    fn skill_entry_source_relabels_extracted_bundled_skills() {
-        let home = Path::new("/home/u/.grok");
-
-        let s = skill_fixture(
-            "help",
-            "/home/u/.grok/skills/help/SKILL.md",
-            SkillScope::User,
+    fn apply_slash_collision_flags_reserved_names_and_duplicates() {
+        let mut login = skill_fixture(
+            "login",
+            "/plugins/acme/skills/login/SKILL.md",
+            SkillScope::Plugin,
         );
-        assert!(matches!(
-            skill_entry_source(&s, home),
-            ConfigSource::Bundled { .. }
-        ));
+        login.plugin_name = Some("acme".into());
+        let deploy = skill_fixture("deploy", "/tmp/deploy/SKILL.md", SkillScope::Local);
+        // Gated builtins like /flush stay untagged — inspect must not invent
+        // /local:flush while the live catalog may still advertise /flush.
+        let flush = skill_fixture("flush", "/tmp/flush/SKILL.md", SkillScope::Local);
+        let commit_local = skill_fixture("commit", "/tmp/l/commit/SKILL.md", SkillScope::Local);
+        let commit_user = skill_fixture("commit", "/tmp/u/commit/SKILL.md", SkillScope::User);
+        let all = [login, deploy, flush, commit_local, commit_user];
+        let [login, deploy, flush, commit_local, commit_user] = &all;
 
-        // Bundled name in a project dir: stays project.
-        let s = skill_fixture("help", "/repo/.grok/skills/help/SKILL.md", SkillScope::Repo);
-        assert!(matches!(
-            skill_entry_source(&s, home),
-            ConfigSource::Project { .. }
-        ));
+        let entry = collision_entry(login, &all);
+        assert_eq!(entry.collides_with.as_deref(), Some("login"));
+        assert_eq!(entry.invocable_as.as_deref(), Some("acme:login"));
 
-        // Bundled name in a user dir outside <grok_home>/skills: stays user.
-        let s = skill_fixture(
-            "help",
-            "/home/u/other-skills/help/SKILL.md",
-            SkillScope::User,
-        );
-        assert!(matches!(
-            skill_entry_source(&s, home),
-            ConfigSource::User { .. }
-        ));
+        for skill in [deploy, flush] {
+            let entry = collision_entry(skill, &all);
+            assert_eq!(entry.collides_with, None, "{}", skill.name);
+            assert_eq!(entry.invocable_as, None, "{}", skill.name);
+        }
 
-        // Bundled frontmatter name in a different dir under <grok_home>/skills:
-        // not the extracted copy — stays user.
-        let s = skill_fixture(
-            "help",
-            "/home/u/.grok/skills/my-tools/SKILL.md",
-            SkillScope::User,
-        );
-        assert!(matches!(
-            skill_entry_source(&s, home),
-            ConfigSource::User { .. }
-        ));
+        let entry = collision_entry(commit_local, &all);
+        assert_eq!(entry.collides_with.as_deref(), Some("commit"));
+        assert_eq!(entry.invocable_as.as_deref(), Some("local:commit"));
+        let entry = collision_entry(commit_user, &all);
+        assert_eq!(entry.invocable_as.as_deref(), Some("user:commit"));
+    }
 
-        // Non-bundled name under <grok_home>/skills: stays user.
-        let s = skill_fixture(
-            "my-skill",
-            "/home/u/.grok/skills/my-skill/SKILL.md",
-            SkillScope::User,
-        );
-        assert!(matches!(
-            skill_entry_source(&s, home),
-            ConfigSource::User { .. }
-        ));
+    #[test]
+    fn apply_slash_collision_folds_reserved_name_case() {
+        let skill = skill_fixture("Login", "/tmp/Login/SKILL.md", SkillScope::Local);
+        let entry = collision_entry(&skill, std::slice::from_ref(&skill));
+        assert_eq!(entry.collides_with.as_deref(), Some("Login"));
+        assert_eq!(entry.invocable_as.as_deref(), Some("local:login"));
+    }
+
+    #[test]
+    fn apply_slash_collision_withholds_contested_qualified_names() {
+        let a = skill_fixture("commit", "/tmp/a/commit/SKILL.md", SkillScope::Local);
+        let b = skill_fixture("commit", "/tmp/b/commit/SKILL.md", SkillScope::Local);
+        let all = [a, b];
+        let entry = collision_entry(&all[0], &all);
+        assert_eq!(entry.collides_with.as_deref(), Some("commit"));
+        assert_eq!(entry.invocable_as, None);
     }
 
     /// A discovery-stamped `config_source` (plugins, `[skills].paths`) wins
     /// over the scope fallback.
     #[test]
     fn skill_entry_source_prefers_stamped_config_source() {
-        let home = Path::new("/home/u/.grok");
         let mut s = skill_fixture("cfg", "/team/skills/cfg/SKILL.md", SkillScope::User);
         s.config_source = Some(ConfigSource::ConfigToml {
             path: PathBuf::from("/team/skills/cfg/SKILL.md"),
         });
         assert!(matches!(
-            skill_entry_source(&s, home),
+            skill_entry_source(&s),
             ConfigSource::ConfigToml { .. }
         ));
     }

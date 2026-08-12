@@ -50,7 +50,7 @@ use crate::session::slash_commands::{self, BuiltinAction, SlashCommandOutcome};
 use crate::session::storage::SessionUpdate;
 use crate::session::user_message::extract_user_query;
 use crate::session::user_message::{construct_user_message, construct_user_message_minimal};
-use crate::terminal::{DEFAULT_TIMEOUT, TerminalRunRequest};
+use crate::terminal::TerminalRunRequest;
 use crate::tools::ToolContext;
 use agent_client_protocol as acp;
 use agent_client_protocol::ContentBlock;
@@ -63,7 +63,6 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::{Mutex as TokioMutex, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
-use tokio_retry::strategy::ExponentialBackoff;
 use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
 use xai_grok_agent::AgentDefinition;
 use xai_grok_agent::prompt::agents_md::LEGACY_AGENTS_MD_REMINDER_PREFIX;
@@ -94,24 +93,36 @@ pub(crate) use types::*;
 pub use types::{TodoGateDecision, TodoGateReason};
 #[path = "acp_session_impl/goal.rs"]
 mod goal;
+#[path = "acp_session_impl/tool_layer_images.rs"]
+mod tool_layer_images;
+#[path = "acp_session_impl/turn.rs"]
+mod turn;
+#[path = "acp_session_impl/workflow.rs"]
+mod workflow_run;
+use tool_layer_images::*;
+#[path = "acp_session_impl/auth_retry.rs"]
+mod auth_retry;
+pub(crate) use auth_retry::{
+    AuthRetryDecision, AuthRetrySchedule, human_duration, pace_uncharged_resubmit,
+};
 #[path = "acp_session_impl/interjection.rs"]
 mod interjection;
 #[path = "acp_session_impl/tool_calls.rs"]
 mod tool_calls;
-#[path = "acp_session_impl/turn.rs"]
-mod turn;
 pub(crate) use interjection::*;
 #[path = "acp_session_impl/laziness.rs"]
 mod laziness;
+#[cfg(test)]
 pub(crate) use laziness::*;
+#[path = "acp_session_impl/prompt_queue.rs"]
+mod prompt_queue;
+pub(super) use prompt_queue::QueueInputRequest;
 #[path = "acp_session_impl/hooks_plugins.rs"]
 mod hooks_plugins;
 #[path = "acp_session_impl/mcp.rs"]
 mod mcp;
 #[path = "acp_session_impl/model_switch.rs"]
 mod model_switch;
-#[path = "acp_session_impl/prompt_queue.rs"]
-mod prompt_queue;
 #[path = "acp_session_impl/slash_exec.rs"]
 mod slash_exec;
 use super::PromptOrigin;
@@ -172,8 +183,12 @@ mod rewind;
 mod run_loop;
 #[path = "acp_session_impl/session_setup.rs"]
 mod session_setup;
+#[path = "acp_session_impl/side_call.rs"]
+mod side_call;
 #[path = "acp_session_impl/turn_end.rs"]
 mod turn_end;
+#[path = "acp_session_impl/turn_summary.rs"]
+mod turn_summary;
 #[path = "acp_session_impl/updates.rs"]
 mod updates;
 use run_loop::*;
@@ -200,8 +215,10 @@ pub(crate) struct InputItem {
     /// Who originated this prompt — user or auto-wake system.
     pub(crate) origin: super::PromptOrigin,
     /// Typed deferred completion retained while an admitted task wake is queued.
-    /// Consumed by Ctrl+C if it removes the wake before the turn starts.
+    /// Consumed by an interactive stop if it removes the wake before the
+    /// turn starts.
     pub(crate) task_wake_fallback: Option<TaskWakeFallback>,
+    pub(crate) tool_overrides_update: Option<xai_grok_sampling_types::ToolOverridesUpdate>,
     pub(crate) respond_to: oneshot::Sender<PromptTurnResult>,
     /// Fired after the user message is in chat history and a persistence flush
     /// barrier has completed (see `SessionCommand::Prompt::persist_ack`).
@@ -237,6 +254,7 @@ struct GoalToolNames {
 pub(super) const GOAL_TASK_DISCIPLINE_TEMPLATE: &str =
     include_str!("templates/goal_task_discipline.md");
 pub(super) const GOAL_RULES_TEMPLATE: &str = include_str!("templates/goal_rules.md");
+pub(super) const GOAL_RULES_TEMPLATE_LEGACY: &str = include_str!("templates/goal_rules_legacy.md");
 /// Plan-aware preamble folded into the goal-rules block when the planner
 /// is enabled and a plan exists. Empty on the legacy path.
 const GOAL_PLAN_BLOCK_TEMPLATE: &str = include_str!("templates/goal_plan_block.md");
@@ -255,6 +273,8 @@ const GOAL_PLAN_BLOCK_TEMPLATE: &str = include_str!("templates/goal_plan_block.m
 /// line is not rendered into this nudge.
 pub(super) const GOAL_CONTINUATION_DIRECTIVE_TEMPLATE: &str =
     include_str!("templates/goal_continuation_directive.md");
+pub(super) const GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY: &str =
+    include_str!("templates/goal_continuation_directive_legacy.md");
 /// Built continuation directive plus the optional premature-stop pattern that
 /// the caller emits when it actually continues. Produced by
 /// [`SessionActor::prepare_goal_continuation`].
@@ -277,12 +297,19 @@ pub(crate) struct State {
     pub(crate) running_task: Option<AgentTask>,
     pub(crate) pending_inputs: VecDeque<InputItem>,
     pub(crate) pending_notifications: Vec<PendingNotification>,
+    /// Prompt ids held out of combine-on-promote (composer edit in progress).
+    pub(crate) combine_edit_holds: std::collections::HashSet<String>,
     /// When true, notifications are buffered but not drained until genuine
-    /// user re-engagement. Set by interactive Ctrl+C, cleared by a user prompt.
+    /// user re-engagement. Set by an interactive stop, cleared by a user
+    /// prompt.
     pub(crate) notifications_suppressed: bool,
-    /// Active prompt is still rewindable until the first outbound prompt-scoped
-    /// event is emitted.
+    /// Active prompt is still rewindable until the first outbound
+    /// prompt-scoped event is emitted; armed at promote, cleared at first
+    /// output or by the rewind pop itself.
     pub(crate) rewindable: bool,
+    /// Whether the running front's user message is recorded where the model
+    /// will see it; lifecycle on `mark_front_message_committed`.
+    pub(crate) front_message_committed: bool,
     /// Layer-3 LazinessDetector: number of `<system-reminder>` nudges
     /// injected so far in this (session, model) pair. Reset to 0 by
     /// the actor's main `select!` loop when its `model_switch_rx`
@@ -349,7 +376,7 @@ impl State {
 /// so they share one definition of idleness, with no drift between them.
 ///
 /// Returns `true` exactly when: no turn is running, no user prompt is
-/// queued, and interactive Ctrl+C has not suppressed notifications pending
+/// queued, and an interactive stop has not suppressed notifications pending
 /// genuine user re-engagement.
 pub(crate) fn is_session_idle_for_injection(state: &State) -> bool {
     state.running_task.is_none()
@@ -428,8 +455,9 @@ fn managed_gateway_error_to_tool_error(
                     );
                 }
                 _ => {
-                    err.details =
-                        Some(serde_json::json!({ HTTP_STATUS_DETAILS_KEY : status.as_u16(), }));
+                    err.details = Some(serde_json::json!({
+                        HTTP_STATUS_DETAILS_KEY: status.as_u16(),
+                    }));
                 }
             }
             err
@@ -605,6 +633,9 @@ pub(crate) struct SessionActor {
     /// this handle. `None` for tests / BYOK that don't need refresh
     /// or the attribution emit.
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
+    /// Session sticky from `session/new` / `session/load` `_meta` chat kind.
+    /// Chat-kind ACU/list sources product REST skills, never Build disk skills.
+    pub(crate) is_chat_kind: bool,
     pub(crate) state: TokioMutex<State>,
     /// Notification transport: gateway, persistence channel, replay buffer.
     pub(crate) notifications: NotificationSender,
@@ -612,20 +643,23 @@ pub(crate) struct SessionActor {
     pub(crate) tool_context: ToolContext,
     /// Managed Read-deny glob patterns, resolved once at construction and
     /// (re-)injected into the ToolBridge so the Grep tool excludes policy-forbidden
-    /// paths. Actor-retained so session setup and harness-rebuild share one source
-    /// of truth (mirrors `goal_update_tx`), rather than re-resolving the config.
     pub(crate) deny_read_globs: Vec<String>,
     /// Consolidated MCP state (configs, clients, init status) protected by a single lock.
     /// This ensures atomicity when updating configs or checking initialization status.
     pub(crate) mcp_state: Arc<TokioMutex<McpState>>,
-    /// MCP initialization strategy
-    pub(crate) mcp_strategy: McpInitStrategy,
+    /// MCP initialization strategy. `Cell`: per-attachment policy — a
+    /// resident `session/load` carrying explicit `startupHints` re-applies
+    /// the attaching client's strategy (`UpdateAttachPolicy`), so a headless
+    /// client attaching to an actor spawned by an interactive one still gets
+    /// Blocking MCP init on its turns (and vice versa).
+    pub(crate) mcp_strategy: std::cell::Cell<McpInitStrategy>,
     /// Actor-based chat state handle — manages conversation, tokens, timing, and persistence.
     /// Also stores credentials (api_key, optional extra access key,
     /// client_version) opaquely.
     pub(crate) chat_state_handle: xai_chat_state::ChatStateHandle,
     /// Current running prompt/turn id, shared with SessionHandle.
     pub(crate) current_prompt_id: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    pub(crate) unattributed_background_usage: std::sync::atomic::AtomicBool,
     /// Open blocking reverse-requests (permission / question / plan-approval),
     /// keyed by `tool_call_id`. Shared with `SessionHandle` so the roster can
     /// read it synchronously to surface `NeedsInput`. Mutated by
@@ -635,6 +669,11 @@ pub(crate) struct SessionActor {
     /// `is_telemetry_enabled() && !is_zdr()` — ZDR teams always have this false.
     pub(crate) telemetry_enabled: bool,
     pub(crate) supports_backend_search: std::cell::Cell<bool>,
+    /// Per-turn override, set at promotion. Not persisted; a reload reverts to the definition seed.
+    pub(crate) tool_overrides: std::cell::RefCell<Option<xai_grok_sampling_types::ToolOverrides>>,
+    /// Configured cutoff a subagent inherits, read off the `SessionHandle` without an actor round-trip.
+    pub(crate) resolved_tool_overrides:
+        std::sync::Arc<arc_swap::ArcSwapOption<xai_grok_sampling_types::ToolOverrides>>,
     pub(crate) compactions_remaining:
         std::cell::Cell<Option<xai_grok_sampling_types::CompactionsRemaining>>,
     pub(crate) compaction_at_tokens:
@@ -656,6 +695,20 @@ pub(crate) struct SessionActor {
     pub(crate) rewind_pending_prompt: std::sync::Mutex<Option<String>>,
     /// Startup hints for the session: currently responsible for customizing the user message prefix and the git status mode (fast no untracked for non-interactive mode)
     pub(crate) startup_hints: StartupHints,
+    /// Delivery-tool names for the CURRENT attachment, seeded from the spawn
+    /// `startupHints.deliveryTools` and re-applied when a resident
+    /// `session/load` carries explicit hints (`UpdateAttachPolicy`). Kept
+    /// separate from the frozen `startup_hints`: structural spawn-time hints
+    /// (subagent identity, inherited prefix) never change on re-attach,
+    /// per-attachment policy may.
+    pub(crate) delivery_tools: std::cell::RefCell<Vec<String>>,
+    /// `nonInteractive` for the CURRENT attachment (same lifecycle as
+    /// `delivery_tools`). Drives operational can-a-human-act-now decisions —
+    /// today the MCP OAuth interactivity on (re)init, which pairs with the
+    /// `UpdateMcpServers` sent by the same resident load. The frozen
+    /// `startup_hints.non_interactive` keeps governing spawn-time structure
+    /// (system prompt variant, user-message prefix, git-status mode).
+    pub(crate) attach_non_interactive: std::cell::Cell<bool>,
     /// Verbatim mirror-fork override: when `Some`, every turn sends this exact
     /// parent tool schema instead of the locally-built toolset, keeping the
     /// child's request prefix byte-identical to the parent for radix cache reuse.
@@ -767,9 +820,8 @@ pub(crate) struct SessionActor {
     pub(crate) plan_mode: Arc<parking_lot::Mutex<crate::session::plan_mode::PlanModeTracker>>,
     /// Whether goal mode (`/goal`) is enabled for this session (feature flag).
     pub(crate) goal_enabled: bool,
-    /// `goal_enabled` && `update_goal` in toolset; refreshed with command availability.
+    pub(crate) background_workflows_enabled: bool,
     goal_harness_enabled: std::sync::atomic::AtomicBool,
-    /// One-shot: auto-pause persisted Active goal when harness is unavailable.
     goal_harness_availability_reconciled: std::sync::atomic::AtomicBool,
     /// Goal mode orchestration tracker. Session-scoped state for the
     /// Design-Execute-Verify loop. Modeled after `plan_mode` above.
@@ -789,14 +841,7 @@ pub(crate) struct SessionActor {
     /// once the counter reaches [`GOAL_CONTINUATION_BACKOFF_THRESHOLD`].
     /// In-memory only — session restart is itself a reset.
     pub(crate) goal_continuation_streak: std::sync::atomic::AtomicU32,
-    /// Consecutive blocked attempts from the model. Reset on successful
-    /// turn completion, goal completion, or goal resume. Only after 3
-    /// consecutive blocked attempts does the goal actually pause.
     pub(crate) goal_blocked_streak: std::sync::atomic::AtomicU32,
-    /// Receiver for goal-update envelopes from the `update_goal` tool.
-    /// Wrapped in `Option` so the drainer task can `.take()` it at
-    /// session start; tests put a fresh receiver back via
-    /// `seed_channel` helpers.
     pub(crate) goal_update_rx: std::cell::RefCell<
         Option<
             tokio::sync::mpsc::UnboundedReceiver<
@@ -804,21 +849,14 @@ pub(crate) struct SessionActor {
             >,
         >,
     >,
-    /// Sender half of the goal-update channel, retained so a mid-session
-    /// harness rebuild can re-register the `GoalUpdateHandle` on the fresh,
-    /// empty ToolBridge. The `rx` half is owned by the drainer task (see
-    /// `goal_update_rx`).
     pub(crate) goal_update_tx: tokio::sync::mpsc::UnboundedSender<
         xai_grok_tools::implementations::grok_build::update_goal::UpdateGoalEnvelope,
     >,
-    /// Resolved master kill-switch for the verification stage (the
-    /// adversarial skeptic panel). `false` short-circuits
-    /// `drain_goal_updates` to plain `tracker.complete()` + ack
-    /// `CompletedWithoutClassifier` and BYPASSES the verification
-    /// stage. `true` enables the skeptic panel with all guards
-    /// (Active-only, mid-turn defer, in-flight re-entry, max-runs
-    /// cap). The field name is preserved to keep
-    /// the env / remote / config wire contract stable.
+    pub(crate) workflow_manager:
+        Arc<tokio::sync::Mutex<crate::session::workflow::manager::WorkflowManager>>,
+    pub(crate) workflow_launch_tx: tokio::sync::mpsc::UnboundedSender<
+        xai_grok_tools::implementations::grok_build::workflow::WorkflowLaunchEnvelope,
+    >,
     pub(crate) goal_classifier_enabled: bool,
     /// Master switch for the goal planner subagent.
     pub(crate) goal_planner_enabled: bool,
@@ -848,8 +886,6 @@ pub(crate) struct SessionActor {
     /// previously-frozen `skeptic_model_assignment` is overridden too — an
     /// instant rollback even for an already-frozen goal.
     pub(crate) goal_use_current_model_only: bool,
-    /// Resolved per-goal classifier run cap (number of
-    /// `update_goal(completed: true)` rejections before the goal
     /// auto-pauses via `BackOff`). Cached at actor construction like
     /// `goal_verifier_skeptic_count`. Default
     /// `GOAL_CLASSIFIER_MAX_RUNS_DEFAULT`; floored at
@@ -870,23 +906,13 @@ pub(crate) struct SessionActor {
     /// has run so subsequent prompt-flow ticks don't repeat the
     /// pause-on-load check.
     pub(crate) goal_plan_reconciled: std::sync::atomic::AtomicBool,
-    /// FIFO of mid-turn-deferred `completed: true` inputs. The
-    /// envelope's ack was resolved with `DeferredToTurnEnd` at defer
-    /// time; only the input is parked here for the TurnEnd drain to
-    /// run through the verification stage.
     pub(crate) pending_classifier_completions: parking_lot::Mutex<
         VecDeque<xai_grok_tools::implementations::grok_build::update_goal::UpdateGoalInput>,
     >,
-    /// Per-session re-entry guard for the verification stage. Set with
-    /// `compare_exchange(false, true)` at fire-entry and cleared on
-    /// result. A second `completed: true` that races in while the
-    /// flag is set short-circuits through
     /// [`Self::account_not_achieved_without_sampler`].
     pub(crate) goal_classifier_in_flight: std::sync::atomic::AtomicBool,
-    /// Agent-level managed MCP config cache (refreshed in background).
+    /// Agent-level managed MCP gateway catalog cache.
     pub(crate) managed_mcp_handle: crate::session::managed_mcp::ManagedMcpStateHandle,
-    /// Earliest managed MCP token expiry; checked before tool dispatch.
-    pub(crate) managed_mcp_expires_at: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
     /// Original client-provided MCP servers from session creation.
     /// Retained for re-merge during plugin reload.
     pub(crate) initial_client_mcp_servers: Vec<acp::McpServer>,
@@ -912,14 +938,13 @@ pub(crate) struct SessionActor {
     pub(crate) deferred_prefix: TaskSlot<String>,
     /// Extensions to notify at turn and session lifecycle edges. Built once by `session_extension_registry` at actor construction and frozen after.
     pub(crate) extension_registry: xai_agent_lifecycle::LocalExtensionRegistry,
-    /// Local calendar date last surfaced to the model — either stamped into the
-    /// `<user_info>` prefix (at session start, compaction, or resume) or
-    /// announced via a date-rollover `<system-reminder>`. Drives
-    /// [`SessionActor::maybe_inject_date_rollover_reminder`] (date
-    /// rollover: tell the model the date advanced when a long session crosses
-    /// local midnight, since the cached prefix isn't re-stamped per turn). The
-    /// actor is single-threaded, so a `Cell` suffices.
+    /// Local date last surfaced to the model, via the `<user_info>` prefix (session start,
+    /// compaction, model switch) or a date-rollover `<system-reminder>`. Plain resume reuses the
+    /// cached prefix. Drives [`SessionActor::maybe_inject_date_rollover_reminder`].
     pub(crate) last_announced_local_date: std::cell::Cell<chrono::NaiveDate>,
+    /// True when the render-failure fallback stamped a date into a date-free template's prefix, so
+    /// [`SessionActor::maybe_inject_date_rollover_reminder`] still rolls it over.
+    pub(crate) prefix_carries_fallback_date: std::cell::Cell<bool>,
     /// Prompt index when search_tool last ran. -1 = never. Used for turns_since_last_search.
     pub(crate) last_search_prompt_index: std::sync::atomic::AtomicI64,
     /// Timestamp (millis since epoch) of the last successful API request.
@@ -969,6 +994,18 @@ pub(crate) struct SessionActor {
     /// Bumped on each real user prompt (queue accept + turn start); in-flight
     /// recap suppresses emit if this changes before commit.
     pub(crate) recap_epoch: std::cell::Cell<u64>,
+    /// The in-flight turn-summary side-call, if any. A newer completion (or a
+    /// real prompt / rewind / cancel / shutdown) aborts it — its result would
+    /// describe an older turn — and a completion respawns; see
+    /// `restart_turn_summary`. Cleared when the task finishes so `Some` means
+    /// "still running".
+    pub(crate) turn_summary_task: std::cell::RefCell<Option<tokio::task::JoinHandle<()>>>,
+    /// Generation of the currently registered turn-summary task. Bumped on
+    /// each spawn so a finishing older task cannot clear a newer slot.
+    pub(crate) turn_summary_generation: std::cell::Cell<u64>,
+    /// Turn-summary gate, resolved once at spawn (env / config / remote
+    /// settings — see `Config::resolve_turn_summary`).
+    pub(crate) turn_summary_enabled: bool,
     /// True while THIS session has a prompt turn in flight (RAII-guarded in
     /// `handle_prompt`, like `tool_context.is_turn_active` — which is the
     /// agent-wide coordinator flag shared by all sessions and so unusable
@@ -1155,8 +1192,11 @@ impl SessionActor {
     /// `send_available_commands_update`).
     async fn command_availability(&self) -> slash_commands::CommandAvailability {
         let tool_names = self.registered_tool_names().await;
-        let availability = self.build_command_availability(&tool_names);
-        self.maybe_reconcile_active_goal_without_harness().await;
+        let has_workflow_runs = !self.workflow_tracker().await.lock().list().is_empty();
+        let availability = self.build_command_availability(&tool_names, has_workflow_runs);
+        if !self.goal_runs_on_workflow_engine() {
+            self.maybe_reconcile_active_goal_without_harness().await;
+        }
         self.maybe_reconcile_active_goal_without_plan().await;
         availability
     }
@@ -1170,6 +1210,7 @@ impl SessionActor {
     fn build_command_availability(
         &self,
         tool_names: &[String],
+        has_workflow_runs: bool,
     ) -> slash_commands::CommandAvailability {
         use xai_grok_tools::implementations::memory::{
             MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME,
@@ -1177,7 +1218,11 @@ impl SessionActor {
         let memory_read_registered = tool_names
             .iter()
             .any(|n| n == MEMORY_SEARCH_TOOL_NAME || n == MEMORY_GET_TOOL_NAME);
-        let goal = self.sync_goal_harness_from_tools(tool_names);
+        let goal = if self.goal_runs_on_workflow_engine() {
+            self.sync_goal_harness()
+        } else {
+            self.sync_goal_harness_from_tools(tool_names)
+        };
         slash_commands::CommandAvailability {
             feedback: self.feedback_manager.is_enabled(),
             memory: self.memory.is_enabled() && memory_read_registered,
@@ -1188,6 +1233,10 @@ impl SessionActor {
             hooks: self.hook_registry.borrow().is_some(),
             plugins: self.plugin_registry.borrow().is_some(),
             goal,
+            workflows: tool_names.iter().any(|n| {
+                n == xai_grok_tools::implementations::grok_build::workflow::WORKFLOW_TOOL_NAME
+            }),
+            workflow_management: has_workflow_runs,
         }
     }
     /// Names of every tool registered with the session's tool bridge.
@@ -1205,16 +1254,43 @@ impl SessionActor {
             .map(|td| td.function.name)
             .collect()
     }
+    pub(crate) async fn workflow_tracker(
+        &self,
+    ) -> Arc<parking_lot::Mutex<crate::session::workflow::tracker::WorkflowTracker>> {
+        self.workflow_manager.lock().await.tracker()
+    }
+    pub(crate) fn goal_runs_on_workflow_engine(&self) -> bool {
+        self.background_workflows_enabled
+    }
     /// Send visible text output to the TUI from a slash command.
     ///
     /// Uses `AgentMessageChunk` so the text appears in the conversation
     /// scrollback, then flushes the replay buffer to ensure delivery
     /// before the turn ends.
     async fn send_slash_command_output(&self, text: &str) {
+        self.send_slash_command_output_with_meta(text, None).await;
+    }
+    async fn send_host_turn_slash_command_output(&self, text: &str) {
+        let mut chunk_meta = serde_json::Map::new();
+        chunk_meta.insert(
+            crate::session::storage::HOST_TURN_META_KEY.into(),
+            serde_json::json!(true),
+        );
+        self.send_slash_command_output_with_meta(text, Some(chunk_meta))
+            .await;
+    }
+    async fn send_slash_command_output_with_meta(
+        &self,
+        text: &str,
+        meta: Option<serde_json::Map<String, serde_json::Value>>,
+    ) {
         self.send_update(
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-                acp::TextContent::new(text.to_string()),
-            ))),
+            acp::SessionUpdate::AgentMessageChunk(
+                acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(
+                    text.to_string(),
+                )))
+                .meta(meta),
+            ),
             None,
         )
         .await;
@@ -1245,11 +1321,13 @@ const PROMPT_CONTEXT_FILENAME: &str = "prompt_context.json";
 /// The saved JSON enables deterministic re-rendering, `grok prompt --json`
 /// inspection, and post-hoc debugging of what went into a session's system prompt.
 fn save_prompt_context(session_info: &SessionInfo, prompt_context: &xai_grok_agent::PromptContext) {
-    let dir = crate::session::persistence::session_dir(session_info);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        tracing::warn!(?e, "failed to create session dir for prompt_context.json");
-        return;
-    }
+    let dir = match crate::session::persistence::ensure_owner_only_session_dir(session_info) {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::warn!(?e, "failed to create session dir for prompt_context.json");
+            return;
+        }
+    };
     let path = dir.join(PROMPT_CONTEXT_FILENAME);
     match serde_json::to_string_pretty(prompt_context) {
         Ok(json) => {
@@ -1277,14 +1355,14 @@ const SYSTEM_PROMPT_FILENAME: &str = "system_prompt.txt";
 /// own `chat_history.jsonl.tmp`; whichever atomic `rename` lands last wins and
 /// the content is identical, so the two writers can never produce a torn file.
 fn persist_chat_history_jsonl_sync(session_info: &SessionInfo, conversation: &[ConversationItem]) {
-    let dir = crate::session::persistence::session_dir(session_info);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        tracing::warn!(
-            session_id = % session_info.id.0, ? e,
-            "persist_chat_history_jsonl_sync: failed to create session dir"
-        );
-        return;
-    }
+    let dir = match crate::session::persistence::ensure_owner_only_session_dir(session_info) {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::warn!(session_id = %session_info.id.0, ?e,
+                "persist_chat_history_jsonl_sync: failed to create session dir");
+            return;
+        }
+    };
     let final_path = dir.join("chat_history.jsonl");
     let tmp_path = dir.join("chat_history.jsonl.sync.tmp");
     let result = (|| -> std::io::Result<()> {
@@ -1300,10 +1378,8 @@ fn persist_chat_history_jsonl_sync(session_info: &SessionInfo, conversation: &[C
         Ok(())
     })();
     if let Err(e) = result {
-        tracing::warn!(
-            session_id = % session_info.id.0, ? e,
-            "persist_chat_history_jsonl_sync: failed to persist chat_history.jsonl"
-        );
+        tracing::warn!(session_id = %session_info.id.0, ?e,
+            "persist_chat_history_jsonl_sync: failed to persist chat_history.jsonl");
         let _ = std::fs::remove_file(&tmp_path);
     }
 }
@@ -1313,11 +1389,13 @@ fn persist_chat_history_jsonl_sync(session_info: &SessionInfo, conversation: &[C
 /// is benign, and this artifact is a convenience mirror, not the source of truth
 /// (the conversation head is).
 fn save_system_prompt(session_info: &SessionInfo, system_prompt: &str) {
-    let dir = crate::session::persistence::session_dir(session_info);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        tracing::warn!(?e, "failed to create session dir for system_prompt.txt");
-        return;
-    }
+    let dir = match crate::session::persistence::ensure_owner_only_session_dir(session_info) {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::warn!(?e, "failed to create session dir for system_prompt.txt");
+            return;
+        }
+    };
     let path = dir.join(SYSTEM_PROMPT_FILENAME);
     if let Err(e) = std::fs::write(&path, system_prompt) {
         tracing::warn!(?e, "failed to write system_prompt.txt");
@@ -1414,7 +1492,7 @@ mod managed_gateway_descriptor_tests {
             .register_mcp_tools(
                 "server__tool".to_string(),
                 FixtureMcpTool,
-                Some(serde_json::json!({ "type" : "object" })),
+                Some(serde_json::json!({"type": "object"})),
             )
             .await
             .expect("local fixture registration succeeds");
@@ -1435,7 +1513,7 @@ mod managed_gateway_descriptor_tests {
                             tool_name: "Collision".to_string(),
                             call_id: "gateway.collision".to_string(),
                             description: "Gateway collision".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                         crate::session::managed_mcp::GatewayTool {
                             connector_id: "gateway".to_string(),
@@ -1444,7 +1522,7 @@ mod managed_gateway_descriptor_tests {
                             tool_name: "Search".to_string(),
                             call_id: "gateway.search".to_string(),
                             description: "Gateway search".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                     ],
                     total_tools: 2,
@@ -1491,7 +1569,7 @@ mod managed_gateway_descriptor_tests {
                             tool_name: "List".to_string(),
                             call_id: "linear.list_issues".to_string(),
                             description: "List issues".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                         crate::session::managed_mcp::GatewayTool {
                             connector_id: "linear".to_string(),
@@ -1500,7 +1578,7 @@ mod managed_gateway_descriptor_tests {
                             tool_name: "Create".to_string(),
                             call_id: "linear.create_issue".to_string(),
                             description: "Create issue".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                         crate::session::managed_mcp::GatewayTool {
                             connector_id: "slack".to_string(),
@@ -1509,7 +1587,7 @@ mod managed_gateway_descriptor_tests {
                             tool_name: "Search".to_string(),
                             call_id: "slack.search".to_string(),
                             description: "Search Slack".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                     ],
                     total_tools: 3,
@@ -1565,10 +1643,17 @@ mod observability_bridge_mapping_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/permission_auto_mode_tests.rs"]
 mod permission_auto_mode_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/permission_prompt_notification_tests.rs"]
+mod permission_prompt_notification_tests;
 /// Resume re-park of the parked `exit_plan_mode` approval.
 #[cfg(test)]
 #[path = "acp_session_tests/plan_approval_resume_tests.rs"]
 mod plan_approval_resume_tests;
+/// Mixed-batch plan.md write + exit_plan_mode snapshot.
+#[cfg(test)]
+#[path = "acp_session_tests/plan_exit_batch_barrier_tests.rs"]
+mod plan_exit_batch_barrier_tests;
 /// Plan-mode edit gate: read-only except the plan file, even under allow-all.
 #[cfg(test)]
 #[path = "acp_session_tests/plan_mode_edit_gate_tests.rs"]
@@ -1613,9 +1698,6 @@ mod rewind_cross_compaction_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/rewind_synthetic_turn_tests.rs"]
 mod rewind_synthetic_turn_tests;
-#[cfg(test)]
-#[path = "acp_session_tests/rewrite_zero_turn_prefix_tests.rs"]
-mod rewrite_zero_turn_prefix_tests;
 /// Pins the `SubagentFinished` usage-fold attribution gate.
 #[cfg(test)]
 #[path = "acp_session_tests/subagent_usage_fold_tests.rs"]
@@ -1714,6 +1796,7 @@ mod tool_meta_stamp_tests {
                     yolo_pin: None,
                     deny_read_globs: Arc::new(vec![]),
                     in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    user_prompt_notify: Arc::new(parking_lot::Mutex::new(None)),
                 };
                 let captured: Arc<tokio::sync::Mutex<Option<acp::ToolCallUpdate>>> =
                     Arc::new(tokio::sync::Mutex::new(None));
@@ -1727,7 +1810,12 @@ mod tool_meta_stamp_tests {
                         } = cmd
                         {
                             *captured_in_task.lock().await = Some(tool_call_update);
-                            let _ = respond_to.send(Decision::Allow);
+                            let _ = respond_to.send(
+                                xai_grok_workspace::permission::PermissionResolution {
+                                    decision: Decision::Allow,
+                                    event: None,
+                                },
+                            );
                         }
                     }
                 });
@@ -1783,6 +1871,9 @@ impl Drop for TurnMetrics {
 #[cfg(test)]
 #[path = "acp_session_tests/auth_error_no_retry_tests.rs"]
 mod auth_error_no_retry_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/turn/auth_retry_budget_tests.rs"]
+mod auth_retry_budget_tests;
 /// Regression coverage for the auto-wake suppression sweep + shutdown
 /// drain. These exercise the helpers added to fix the trailing
 /// `<system-reminder>` chat history bug.
@@ -1799,11 +1890,14 @@ mod build_tool_parse_error_message_tests;
 #[path = "acp_session_tests/cancel_running_task_tests.rs"]
 mod cancel_running_task_tests;
 #[cfg(test)]
+#[path = "acp_session_tests/turn/chat_history_integrity_tests.rs"]
+mod chat_history_integrity_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/turn/disk_full_tests.rs"]
+mod disk_full_tests;
+#[cfg(test)]
 #[path = "acp_session_tests/feedback_turn_lookup_tests.rs"]
 mod feedback_turn_lookup_tests;
-#[cfg(test)]
-#[path = "acp_session_tests/goal/goal_reminder_subagent_rules_tests.rs"]
-mod goal_reminder_subagent_rules_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/idle_resume_tests.rs"]
 mod idle_resume_tests;
@@ -1823,6 +1917,9 @@ mod laziness_integration_tests;
 #[path = "acp_session_tests/load_user_prompts_tests.rs"]
 mod load_user_prompts_tests;
 #[cfg(test)]
+#[path = "acp_session_tests/mcp_connecting_reminder_tests.rs"]
+mod mcp_connecting_reminder_tests;
+#[cfg(test)]
 #[path = "acp_session_tests/media_gen_auth_retry_tests.rs"]
 mod media_gen_auth_retry_tests;
 #[cfg(test)]
@@ -1835,14 +1932,11 @@ mod parallel_dispatch_tests;
 #[path = "acp_session_tests/prompt_context_persistence_tests.rs"]
 mod prompt_context_persistence_tests;
 #[cfg(test)]
-#[path = "acp_session_tests/reactive_managed_reauth_e2e_tests.rs"]
-mod reactive_managed_reauth_e2e_tests;
-#[cfg(test)]
-#[path = "acp_session_tests/reactive_managed_reauth_tests.rs"]
-mod reactive_managed_reauth_tests;
-#[cfg(test)]
 #[path = "acp_session_tests/session_thread_tests.rs"]
 mod session_thread_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/tool_layer_images_bridge_tests.rs"]
+mod tool_layer_images_bridge_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/turn/turn_end_guard_tests.rs"]
 mod turn_end_guard_tests;
@@ -1902,7 +1996,7 @@ mod managed_gateway_tool_tests {
             .register_mcp_tools(
                 "server__tool".to_string(),
                 FixtureMcpTool,
-                Some(serde_json::json!({ "type" : "object" })),
+                Some(serde_json::json!({"type": "object"})),
             )
             .await
             .expect("local fixture registration succeeds");
@@ -1923,7 +2017,7 @@ mod managed_gateway_tool_tests {
                             tool_name: "Collision".to_string(),
                             call_id: "gateway.collision".to_string(),
                             description: "Gateway collision".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                         crate::session::managed_mcp::GatewayTool {
                             connector_id: "gateway".to_string(),
@@ -1932,7 +2026,7 @@ mod managed_gateway_tool_tests {
                             tool_name: "Search".to_string(),
                             call_id: "gateway.search".to_string(),
                             description: "Gateway search".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                     ],
                     total_tools: 2,
@@ -1974,7 +2068,7 @@ mod managed_gateway_tool_tests {
                             tool_name: "List".to_string(),
                             call_id: "linear.list_issues".to_string(),
                             description: "List issues".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                         crate::session::managed_mcp::GatewayTool {
                             connector_id: "linear".to_string(),
@@ -1983,7 +2077,7 @@ mod managed_gateway_tool_tests {
                             tool_name: "Create".to_string(),
                             call_id: "linear.create_issue".to_string(),
                             description: "Create issue".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                         crate::session::managed_mcp::GatewayTool {
                             connector_id: "slack".to_string(),
@@ -1992,7 +2086,7 @@ mod managed_gateway_tool_tests {
                             tool_name: "Search".to_string(),
                             call_id: "slack.search".to_string(),
                             description: "Search Slack".to_string(),
-                            json_schema: serde_json::json!({ "type" : "object" }),
+                            json_schema: serde_json::json!({"type": "object"}),
                         },
                     ],
                     total_tools: 3,
@@ -2041,20 +2135,8 @@ mod managed_gateway_tool_tests {
     }
 }
 #[cfg(test)]
-#[path = "acp_session_tests/goal/goal_backoff_tests.rs"]
-mod goal_backoff_tests;
-#[cfg(test)]
-#[path = "acp_session_tests/goal/goal_classifier_e2e_tests.rs"]
-mod goal_classifier_e2e_tests;
-#[cfg(test)]
 #[path = "acp_session_tests/goal/goal_planner_e2e_tests.rs"]
 mod goal_planner_e2e_tests;
-#[cfg(test)]
-#[path = "acp_session_tests/goal/goal_strategist_e2e_tests.rs"]
-mod goal_strategist_e2e_tests;
-#[cfg(test)]
-#[path = "acp_session_tests/goal/goal_summarizer_e2e_tests.rs"]
-mod goal_summarizer_e2e_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/interjection_tests.rs"]
 mod interjection_tests;

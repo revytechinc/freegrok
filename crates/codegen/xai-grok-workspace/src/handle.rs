@@ -55,6 +55,56 @@ static PRODUCER_SPAWNED_AFTER_DRAIN_TOTAL: std::sync::LazyLock<IntCounter> =
         )
         .unwrap()
     });
+/// Startup stages until hub connected. Labels: stage + outcome (ok/error).
+static STARTUP_STAGE_DURATION_SECONDS: std::sync::LazyLock<HistogramVec> =
+    std::sync::LazyLock::new(|| {
+        register_histogram_vec!(
+            "grok_workspace_startup_stage_duration_seconds",
+            "Workspace-server startup stage wall time by stage and outcome \
+             (ok/error; fat-tail failures are recorded, not only success): \
+             startup_recovery, tool_catalog, hub_ws_connect \
+             (open_socket+hello through on_connect), connect_hub (catalog+ws), \
+             time_to_ready (connect_local_workspace start to hub connect attempt end).",
+            &["stage", "outcome"],
+            vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0,
+                60.0,
+            ]
+        )
+        .unwrap()
+    });
+const STARTUP_STAGE_STARTUP_RECOVERY: &str = "startup_recovery";
+const STARTUP_STAGE_TOOL_CATALOG: &str = "tool_catalog";
+const STARTUP_STAGE_HUB_WS_CONNECT: &str = "hub_ws_connect";
+const STARTUP_STAGE_CONNECT_HUB: &str = "connect_hub";
+const STARTUP_STAGE_TIME_TO_READY: &str = "time_to_ready";
+const STARTUP_OUTCOME_OK: &str = "ok";
+const STARTUP_OUTCOME_ERROR: &str = "error";
+fn observe_startup_stage(stage: &str, outcome: &str, secs: f64) {
+    STARTUP_STAGE_DURATION_SECONDS
+        .with_label_values(&[stage, outcome])
+        .observe(secs);
+}
+/// tool_catalog always; connect_hub error only when catalog fails. Testable.
+fn observe_connect_hub_catalog_result(
+    catalog_ok: bool,
+    tool_catalog_secs: f64,
+    connect_hub_secs: f64,
+) {
+    let outcome = if catalog_ok {
+        STARTUP_OUTCOME_OK
+    } else {
+        STARTUP_OUTCOME_ERROR
+    };
+    observe_startup_stage(STARTUP_STAGE_TOOL_CATALOG, outcome, tool_catalog_secs);
+    if !catalog_ok {
+        observe_startup_stage(
+            STARTUP_STAGE_CONNECT_HUB,
+            STARTUP_OUTCOME_ERROR,
+            connect_hub_secs,
+        );
+    }
+}
 /// `session.bind` resolutions advertising zero model-facing tools, by reason.
 /// At most one reason is counted per zero-tool bind.
 static WORKSPACE_BIND_ZERO_TOOLS_TOTAL: std::sync::LazyLock<IntCounterVec> =
@@ -289,6 +339,17 @@ pub(crate) fn init_metrics() {
     ENV_CAPTURE_PANIC_TOTAL.inc_by(0);
     std::sync::LazyLock::force(&DRAIN_DURATION);
     std::sync::LazyLock::force(&WORKSPACE_BIND_ADVERTISED_TOOLS);
+    for stage in [
+        STARTUP_STAGE_STARTUP_RECOVERY,
+        STARTUP_STAGE_TOOL_CATALOG,
+        STARTUP_STAGE_HUB_WS_CONNECT,
+        STARTUP_STAGE_CONNECT_HUB,
+        STARTUP_STAGE_TIME_TO_READY,
+    ] {
+        for outcome in [STARTUP_OUTCOME_OK, STARTUP_OUTCOME_ERROR] {
+            let _ = STARTUP_STAGE_DURATION_SECONDS.with_label_values(&[stage, outcome]);
+        }
+    }
     for reason in [
         "workspace_shutdown",
         "session_lookup_failed",
@@ -517,7 +578,7 @@ impl WorkspaceHandle {
                 .collect();
             let (registry, errors) = load_hooks_from_sources(&global_refs, &project_refs);
             for err in &errors {
-                tracing::warn!(error = % err, "hook discovery error (non-fatal)");
+                tracing::warn!(error = %err, "hook discovery error (non-fatal)");
             }
             tracing::info!(
                 hook_count = registry.len(),
@@ -560,15 +621,25 @@ impl WorkspaceHandle {
         let session_event_writers: Arc<
             dashmap::DashMap<String, xai_file_utils::events::EventWriter>,
         > = Arc::new(dashmap::DashMap::new());
-        let activity_tracker = Arc::new(
-            crate::activity::ActivityTracker::with_prune_window(
-                config.status_config.session_idle_prune,
-            )
-            .with_idle_ignores_background(config.status_config.idle_ignores_background)
-            .with_preview_activity_window_ms(
-                config.status_config.preview_activity_window.as_millis() as u64,
-            ),
-        );
+        let activity_tracker =
+            Arc::new(
+                crate::activity::ActivityTracker::with_prune_window(
+                    config.status_config.session_idle_prune,
+                )
+                .with_idle_ignores_background(config.status_config.idle_ignores_background)
+                .with_preview_activity_window_ms(
+                    config.status_config.preview_activity_window.as_millis() as u64,
+                )
+                .with_rpc_activity_window_ms(
+                    config.status_config.rpc_activity_window.as_millis() as u64
+                )
+                .with_presence_activity_window_ms(
+                    config
+                        .status_config
+                        .effective_presence_activity_window()
+                        .as_millis() as u64,
+                ),
+            );
         activity_tracker.set_event_writers(session_event_writers.clone());
         if let Some(queue) = &upload_queue {
             activity_tracker.set_upload_queue_stats(queue.stats_arc());
@@ -830,7 +901,7 @@ impl WorkspaceHandle {
             system_notifications,
             system_notify_channel,
         ));
-        tracing::info!(session_id = % session_id, "create_session: new session created");
+        tracing::info!(session_id = %session_id, "create_session: new session created");
         sessions.insert(session_id, session.clone());
         record_toolset_swap(
             &self.shared.activity_tracker,
@@ -888,7 +959,8 @@ impl WorkspaceHandle {
         match SwapPolicy::evaluate(&snapshot, trigger) {
             SwapDecision::Reuse => {
                 tracing::debug!(
-                    session_id = % session_id, trigger = trigger.metric_label(),
+                    session_id = %session_id,
+                    trigger = trigger.metric_label(),
                     "toolset config identical to the stored bind fingerprint — \
                      reused untouched"
                 );
@@ -902,7 +974,8 @@ impl WorkspaceHandle {
                     SwapAction::Skipped(reason),
                 );
                 tracing::warn!(
-                    session_id = % session_id, trigger = trigger.metric_label(),
+                    session_id = %session_id,
+                    trigger = trigger.metric_label(),
                     "toolset swap skipped: toolset terminal backend is externally \
                      owned (local bind)"
                 );
@@ -916,7 +989,8 @@ impl WorkspaceHandle {
                     SwapAction::Deferred(reason),
                 );
                 tracing::info!(
-                    session_id = % session_id, trigger = trigger.metric_label(),
+                    session_id = %session_id,
+                    trigger = trigger.metric_label(),
                     "toolset mutation rejected: turn active — retry at the turn boundary"
                 );
                 Err(crate::error::WorkspaceError::TurnActive(
@@ -994,7 +1068,8 @@ impl WorkspaceHandle {
                 SwapDecision::Apply => {}
                 SwapDecision::Reuse => {
                     tracing::debug!(
-                        session_id = % session_id, trigger = trigger.metric_label(),
+                        session_id = %session_id,
+                        trigger = trigger.metric_label(),
                         "resolved toolset discarded post-resolve: a concurrent \
                          bind installed the identical fingerprint during the \
                          re-resolve"
@@ -1009,7 +1084,8 @@ impl WorkspaceHandle {
                         SwapAction::Skipped(reason),
                     );
                     tracing::warn!(
-                        session_id = % session_id, trigger = trigger.metric_label(),
+                        session_id = %session_id,
+                        trigger = trigger.metric_label(),
                         "toolset swap skipped: toolset terminal backend is externally \
                          owned (local bind)"
                     );
@@ -1027,7 +1103,8 @@ impl WorkspaceHandle {
                         SwapAction::Deferred(reason),
                     );
                     tracing::info!(
-                        session_id = % session_id, trigger = trigger.metric_label(),
+                        session_id = %session_id,
+                        trigger = trigger.metric_label(),
                         "toolset mutation rejected post-resolve: a turn started during \
                          the re-resolve — resolved toolset discarded; retry at the \
                          turn boundary"
@@ -1086,8 +1163,8 @@ impl WorkspaceHandle {
                         SwapAction::Deferred(reason),
                     );
                     tracing::warn!(
-                        session_id = % session_id, in_flight = snapshot
-                        .in_flight_calls(),
+                        session_id = %session_id,
+                        in_flight = snapshot.in_flight_calls(),
                         "session.bind: rebind swap (changed explicit toolset or stale-heal \
                          re-apply) deferred: tool calls in flight — keeping the existing \
                          toolset"
@@ -1102,7 +1179,7 @@ impl WorkspaceHandle {
                         SwapAction::Skipped(reason),
                     );
                     tracing::warn!(
-                        session_id = % session_id,
+                        session_id = %session_id,
                         "session.bind: rebind carried a changed toolset config, but the \
                          session's toolset is externally owned (local bind) — keeping the \
                          existing toolset; the new config did NOT take effect"
@@ -1121,19 +1198,19 @@ impl WorkspaceHandle {
                     {
                         Ok(SwapOutcome::Swapped) => {
                             tracing::info!(
-                                session_id = % session_id,
+                                session_id = %session_id,
                                 "session.bind: rebind carried a changed toolset config — re-resolved \
-                             and swapped"
+                                 and swapped"
                             );
                             RebindOutcome::Reresolved
                         }
                         Ok(SwapOutcome::Reused) => RebindOutcome::Reused,
                         Ok(SwapOutcome::SkippedExternallyOwned) => {
                             tracing::warn!(
-                                session_id = % session_id,
+                                session_id = %session_id,
                                 "session.bind: rebind carried a changed toolset config, but the \
-                             session's toolset is externally owned (local bind) — keeping the \
-                             existing toolset; the new config did NOT take effect"
+                                 session's toolset is externally owned (local bind) — keeping the \
+                                 existing toolset; the new config did NOT take effect"
                             );
                             RebindOutcome::KeptExternallyOwned
                         }
@@ -1145,9 +1222,9 @@ impl WorkspaceHandle {
                                 SwapAction::ApplyFailed,
                             );
                             tracing::warn!(
-                                session_id = % session_id, error = % e,
+                                session_id = %session_id, error = %e,
                                 "session.bind: rebind toolset re-resolve failed — keeping the \
-                             existing toolset"
+                                 existing toolset"
                             );
                             RebindOutcome::ReresolveFailed
                         }
@@ -1170,8 +1247,10 @@ impl WorkspaceHandle {
             )
             .await;
         tracing::debug!(
-            session = % session_id, turn = payload.turn_number, model = % payload
-            .model_id, "workspace: before_turn processed"
+            session = %session_id,
+            turn = payload.turn_number,
+            model = %payload.model_id,
+            "workspace: before_turn processed"
         );
         self.shared
             .session_event_writer(session_id)
@@ -1221,8 +1300,10 @@ impl WorkspaceHandle {
             )
             .await;
         tracing::debug!(
-            session = % session_id, turn = payload.turn_number, outcome = ? payload
-            .outcome, "workspace: after_turn processed"
+            session = %session_id,
+            turn = payload.turn_number,
+            outcome = ?payload.outcome,
+            "workspace: after_turn processed"
         );
         self.shared
             .session_event_writer(session_id)
@@ -1281,8 +1362,11 @@ impl WorkspaceHandle {
                 )
                 .await;
                 tracing::debug!(
-                    session_id = % session_id, turn_number = payload.turn_number, ?
-                    status, artifact_count, "after_turn ack returned on hook reply"
+                    session_id = %session_id,
+                    turn_number = payload.turn_number,
+                    ?status,
+                    artifact_count,
+                    "after_turn ack returned on hook reply"
                 );
                 HookReply {
                     after_turn_ack: Some(AfterTurnAckPayload {
@@ -1306,7 +1390,9 @@ impl WorkspaceHandle {
         let was = session.yolo_mode();
         if was != yolo_mode {
             tracing::info!(
-                session = % session_id, from = was, to = yolo_mode,
+                session = %session_id,
+                from = was,
+                to = yolo_mode,
                 "workspace: yolo_mode changed via before-turn hook"
             );
             session.set_yolo_mode(yolo_mode);
@@ -1355,8 +1441,12 @@ impl WorkspaceHandle {
         }
         let Some(upload_queue) = self.shared.upload_queue.clone() else {
             dc_log!(
-                debug, session_id = % session_id, turn_number, phase = "tool_state",
-                outcome = "skipped", skip_reason = "no_upload_queue",
+                debug,
+                session_id = %session_id,
+                turn_number,
+                phase = "tool_state",
+                outcome = "skipped",
+                skip_reason = "no_upload_queue",
                 "workspace: tool_state upload skipped — no upload queue"
             );
             crate::upload::record_upload_outcome("tool_state", "skipped");
@@ -1365,8 +1455,12 @@ impl WorkspaceHandle {
         };
         let Some(session) = self.session(session_id) else {
             dc_log!(
-                warn, session_id = % session_id, turn_number, phase = "tool_state",
-                outcome = "skipped", skip_reason = "no_session",
+                warn,
+                session_id = %session_id,
+                turn_number,
+                phase = "tool_state",
+                outcome = "skipped",
+                skip_reason = "no_session",
                 "workspace: tool_state upload skipped — no bound session"
             );
             crate::upload::record_upload_outcome("tool_state", "skipped");
@@ -1385,8 +1479,11 @@ impl WorkspaceHandle {
             .is_err()
             {
                 dc_log!(
-                    warn, session_id = % session_id, turn_number, error_category =
-                    "enqueue_failed", "workspace: tool_state upload failed"
+                    warn,
+                    session_id = %session_id,
+                    turn_number,
+                    error_category = "enqueue_failed",
+                    "workspace: tool_state upload failed"
                 );
                 crate::upload::record_upload_failed("tool_state", "enqueue_failed");
                 crate::upload::record_upload_outcome("tool_state", "failed");
@@ -1423,7 +1520,7 @@ impl WorkspaceHandle {
         }
         if !is_safe_object_segment(session_id) {
             self.shared.tool_defs_last_emit.remove(session_id);
-            tracing::warn!(% session_id, "tool_defs: unsafe session id, skipping");
+            tracing::warn!(%session_id, "tool_defs: unsafe session id, skipping");
             return;
         }
         let Some(upload_queue) = self.shared.upload_queue.clone() else {
@@ -1433,7 +1530,7 @@ impl WorkspaceHandle {
             if self.session(session_id).is_none() {
                 self.shared.tool_defs_last_emit.remove(session_id);
             }
-            tracing::debug!(% session_id, "tool_defs: no payload, skipping");
+            tracing::debug!(%session_id, "tool_defs: no payload, skipping");
             return;
         };
         let session_id = session_id.to_owned();
@@ -1457,10 +1554,7 @@ impl WorkspaceHandle {
         let definitions = session.toolset().tool_definitions();
         let bytes = serde_json::to_vec_pretty(&definitions)
             .inspect_err(|e| {
-                tracing::warn!(
-                    % session_id, error = % e,
-                    "failed to serialize workspace tool definitions"
-                );
+                tracing::warn!(%session_id, error = %e, "failed to serialize workspace tool definitions");
             })
             .ok()?;
         Some((workspace_tool_definitions_path(session_id), bytes))
@@ -1596,7 +1690,7 @@ impl WorkspaceHandle {
             Some(session_id),
             xai_file_utils::events::ToolOutcome::Cancelled,
         );
-        tracing::info!(% session_id, % call_id, "cancel_tool_call: marked as completed");
+        tracing::info!(%session_id, %call_id, "cancel_tool_call: marked as completed");
     }
     /// Cancel all in-flight tool calls for a session. Called when a
     /// session-wide Cancel hook arrives (no specific `call_id`).
@@ -1605,9 +1699,7 @@ impl WorkspaceHandle {
             .shared
             .activity_tracker
             .cancel_all_session_calls(session_id);
-        tracing::info!(
-            % session_id, count, "cancel_all_tool_calls: marked all as completed"
-        );
+        tracing::info!(%session_id, count, "cancel_all_tool_calls: marked all as completed");
     }
     /// Clean up workspace state for a session that has ended.
     /// Does **not** drop the session — that is handled by the server's
@@ -1619,7 +1711,7 @@ impl WorkspaceHandle {
             .inflight_enqueues
             .retain(|(sid, _), _| sid != session_id);
         self.shared.tool_defs_last_emit.remove(session_id);
-        tracing::info!(% session_id, "session_ended cleanup completed");
+        tracing::info!(%session_id, "session_ended cleanup completed");
     }
     /// Record a YOLO / always-approve mode toggle into the session's
     /// `events.jsonl`. These volatile-config mutations are shell-owned; this is
@@ -1630,7 +1722,7 @@ impl WorkspaceHandle {
         self.shared
             .session_event_writer(session_id)
             .emit(Event::YoloToggled { enabled });
-        tracing::debug!(% session_id, enabled, "workspace: yolo toggle recorded");
+        tracing::debug!(%session_id, enabled, "workspace: yolo toggle recorded");
     }
     /// Record an MCP server enable/disable toggle into the session's
     /// `events.jsonl`. Like [`on_yolo_toggled`](Self::on_yolo_toggled), this is
@@ -1644,9 +1736,7 @@ impl WorkspaceHandle {
                 server_name: server_name.to_owned(),
                 enabled,
             });
-        tracing::debug!(
-            % session_id, % server_name, enabled, "workspace: mcp toggle recorded"
-        );
+        tracing::debug!(%session_id, %server_name, enabled, "workspace: mcp toggle recorded");
     }
     /// Returns a cloned snapshot of the hook registry, disconnected
     /// from the workspace's live state.
@@ -2225,17 +2315,18 @@ impl WorkspaceHandle {
                 continue;
             }
             last_generation = Some(data.generation);
-            let mut params = serde_json::json!(
-                { "sessionId" : context_id.as_str(), "searchId" : search_id.as_str(),
-                "matches" : serde_json::to_value(& data.matches).unwrap_or_default(),
-                "total" : data.total, "done" : data.done, "generation" : data.generation,
-                }
-            );
+            let mut params = serde_json::json!({
+                "sessionId": context_id.as_str(),
+                "searchId": search_id.as_str(),
+                "matches": serde_json::to_value(&data.matches).unwrap_or_default(),
+                "total": data.total,
+                "done": data.done,
+                "generation": data.generation,
+            });
             if !target_client_id.is_none() {
-                params["_meta"] = serde_json::json!(
-                    { "targetClientId" : serde_json::to_value(& target_client_id)
-                    .unwrap_or_default(), }
-                );
+                params["_meta"] = serde_json::json!({
+                    "targetClientId": serde_json::to_value(&target_client_id).unwrap_or_default(),
+                });
             }
             self.emit_client_ext("x.ai/search/fuzzy/status".to_string(), params);
             if data.done {
@@ -2256,13 +2347,14 @@ impl WorkspaceHandle {
         let handle = self.clone();
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         crate::file_system::content_search_streaming(&cwd, &params, cancel, move |batch| {
-            let params = serde_json::json!(
-                { "sessionId" : context_id.as_str(), "files" :
-                serde_json::to_value(& batch.files).unwrap_or_default(),
-                "totalMatches" : batch.total_matches, "totalFiles" : batch
-                .total_files, "done" : batch.done, "truncated" : batch.truncated,
-                }
-            );
+            let params = serde_json::json!({
+                "sessionId": context_id.as_str(),
+                "files": serde_json::to_value(&batch.files).unwrap_or_default(),
+                "totalMatches": batch.total_matches,
+                "totalFiles": batch.total_files,
+                "done": batch.done,
+                "truncated": batch.truncated,
+            });
             handle.emit_client_ext("x.ai/search/content/status".to_string(), params);
         })
         .await
@@ -2294,9 +2386,7 @@ impl WorkspaceHandle {
                             let event =
                                 crate::fs_notify::ws_event_to_codebase_graph_event(path, kind);
                             if let Err(e) = idx.send_event(event) {
-                                tracing::debug!(
-                                    error = % e, "codebase graph: fs event forward failed"
-                                );
+                                tracing::debug!(error = %e, "codebase graph: fs event forward failed");
                             }
                         }
                     }
@@ -2408,7 +2498,7 @@ impl WorkspaceHandle {
     ) -> Option<xai_file_utils::queue::EnqueueOutcome> {
         let upload_queue = self.shared.upload_queue.clone()?;
         if !is_safe_object_segment(session_id) {
-            tracing::warn!(% session_id, "environment: unsafe session id, skipping");
+            tracing::warn!(%session_id, "environment: unsafe session id, skipping");
             return None;
         }
         let env = {
@@ -2442,19 +2532,19 @@ impl WorkspaceHandle {
             {
                 Ok(env) => env,
                 Err(e) if e.is_cancelled() => {
-                    tracing::debug!(
-                        % session_id, "environment: capture cancelled during shutdown"
-                    );
+                    tracing::debug!(%session_id, "environment: capture cancelled during shutdown");
                     return None;
                 }
                 Err(e) => {
                     dc_log!(
-                        warn, session_id = % session_id,
+                        warn,
+                        session_id = %session_id,
                         "workspace: environment capture panicked"
                     );
                     ENV_CAPTURE_PANIC_TOTAL.inc();
                     tracing::warn!(
-                        % session_id, error = % e,
+                        %session_id,
+                        error = %e,
                         "workspace: environment capture task panicked"
                     );
                     return None;
@@ -2465,7 +2555,8 @@ impl WorkspaceHandle {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(
-                    session_id = % session_id, error = % e,
+                    session_id = %session_id,
+                    error = %e,
                     "workspace: failed to serialize workspace_environment.json"
                 );
                 return None;
@@ -2485,7 +2576,9 @@ impl WorkspaceHandle {
         match &outcome {
             xai_file_utils::queue::EnqueueOutcome::Failed { reason: _ } => {
                 dc_log!(
-                    warn, session_id = % session_id, error_category = "enqueue_failed",
+                    warn,
+                    session_id = %session_id,
+                    error_category = "enqueue_failed",
                     "workspace: environment artifact enqueue failed"
                 );
                 crate::upload::record_upload_failed("workspace_environment", "enqueue_failed");
@@ -2493,7 +2586,9 @@ impl WorkspaceHandle {
             }
             _ => {
                 dc_log!(
-                    info, session_id = % session_id, bytes = bytes.len(),
+                    info,
+                    session_id = %session_id,
+                    bytes = bytes.len(),
                     "workspace: environment artifact enqueued"
                 );
                 crate::upload::record_upload_outcome("workspace_environment", "succeeded");
@@ -2549,14 +2644,18 @@ impl WorkspaceHandle {
             let overrides_map: HashMap<String, McpClientTimeoutOverrides> = HashMap::new();
             let meta_config_map = McpMetaConfigMap::new();
             let oauth_config_map = McpOAuthConfigMap::new();
+            let ctx = xai_grok_mcp::servers::McpSpawnCtx::for_session(
+                &session_id_owned,
+                &event_writer,
+                xai_grok_mcp::servers::OauthInteractivity::Interactive,
+                None,
+            );
             rt_handle.block_on(xai_grok_mcp::servers::start_mcp_servers(
                 configs,
-                Some(&session_id_owned),
                 &overrides_map,
                 &meta_config_map,
                 &oauth_config_map,
-                &event_writer,
-                xai_grok_mcp::servers::OauthInteractivity::Interactive,
+                &ctx,
             ))
         })
         .await
@@ -2601,8 +2700,10 @@ impl WorkspaceHandle {
                                     .await
                                 {
                                     tracing::warn!(
-                                        server = % server_name, tool = % qualified_name, error = %
-                                        e, "failed to register MCP tool on hub"
+                                        server = %server_name,
+                                        tool = %qualified_name,
+                                        error = %e,
+                                        "failed to register MCP tool on hub"
                                     );
                                 } else if let Ok(tid) =
                                     xai_tool_protocol::ToolId::new(&qualified_name)
@@ -2619,7 +2720,8 @@ impl WorkspaceHandle {
                                 state.owned_clients.remove(&server_name);
                             }
                             tracing::warn!(
-                                server = % server_name, error = % e,
+                                server = %server_name,
+                                error = %e,
                                 "McpBridge::connect failed"
                             );
                             failed.push(McpStartFailure {
@@ -2632,7 +2734,9 @@ impl WorkspaceHandle {
                 Err(e) => {
                     let name = server_name_from_mcp_error(&e).to_owned();
                     tracing::warn!(
-                        server = % name, error = % e, "MCP server start failed"
+                        server = %name,
+                        error = %e,
+                        "MCP server start failed"
                     );
                     failed.push(McpStartFailure {
                         name,
@@ -2650,7 +2754,9 @@ impl WorkspaceHandle {
             ids.extend(registered_tool_ids);
         }
         tracing::info!(
-            session_id = % session_id, started = ? started, failed_count = failed.len(),
+            session_id = %session_id,
+            started = ?started,
+            failed_count = failed.len(),
             "session MCP servers initialized"
         );
         if !started.is_empty() {
@@ -2818,8 +2924,9 @@ impl WorkspaceHandle {
             return Err(WorkspaceError::SessionNotFound(session_id.to_owned()));
         };
         drop(sessions);
-        session.abort_system_notify_forwarder();
+        session.abort_system_notify_producers();
         session.shutdown_terminal_backend();
+        session.shutdown_browser_service();
         session.cancel_hunk_tracker();
         self.shared.tool_defs_last_emit.remove(session_id);
         Ok(())
@@ -2925,13 +3032,13 @@ impl WorkspaceHandle {
                         crate::config::ResolvedToolset::MissingToolConfig => {
                             if bind_config.rpc_only {
                                 tracing::info!(
-                                    session_id = % sid_str,
+                                    session_id = %sid_str,
                                     "session.bind: rpc_only bind with no toolset — \
                                      failing closed with an empty toolset"
                                 );
                             } else {
                                 tracing::warn!(
-                                    session_id = % sid_str,
+                                    session_id = %sid_str,
                                     "session.bind: no explicit tool configuration passed and this \
                                      workspace requires one — failing closed with an empty toolset"
                                 );
@@ -2939,26 +3046,26 @@ impl WorkspaceHandle {
                             resolve_zero_reason = Some("missing_tool_config");
                             resolve_error = Some(
                                 format!(
-                                    "missing_tool_config: no usable explicit tool configuration \
+                                "missing_tool_config: no usable explicit tool configuration \
                                  on session.bind (absent, or dropped as malformed — see \
                                  server logs) and this workspace requires one (presets are \
                                  not supported; server version {})",
-                                    xai_grok_version::VERSION
-                                ),
+                                xai_grok_version::VERSION
+                            ),
                             );
                             Some(empty_toolset())
                         }
                         crate::config::ResolvedToolset::InvalidToolConfig(err) => {
                             tracing::warn!(
-                                session_id = % sid_str, error = % err,
+                                session_id = %sid_str, error = %err,
                                 "session.bind: invalid tool config entry — failing closed with an empty toolset"
                             );
                             resolve_zero_reason = Some("invalid_tool_config");
                             resolve_error = Some(
                                 format!(
-                                    "invalid_tool_config: {err} (server version {})",
-                                    xai_grok_version::VERSION
-                                ),
+                                "invalid_tool_config: {err} (server version {})",
+                                xai_grok_version::VERSION
+                            ),
                             );
                             Some(empty_toolset())
                         }
@@ -2977,8 +3084,11 @@ impl WorkspaceHandle {
                         .unwrap_or(crate::capability::CapabilityMode::All);
                     let yolo_mode = bind_config.yolo_mode.unwrap_or(false);
                     tracing::info!(
-                        session_id = % sid_str, cwd = ? bind_cwd, preset = ? bind_config
-                        .preset, capability = ? capability, yolo_mode,
+                        session_id = %sid_str,
+                        cwd = ?bind_cwd,
+                        preset = ?bind_config.preset,
+                        capability = ?capability,
+                        yolo_mode,
                         "session.bind: resolving workspace session toolset"
                     );
                     let created = {
@@ -3011,7 +3121,7 @@ impl WorkspaceHandle {
                                 )
                                 .await;
                             tracing::info!(
-                                session_id = % sid_str,
+                                session_id = %sid_str,
                                 "workspace session created for hub bind"
                             );
                             session
@@ -3043,8 +3153,8 @@ impl WorkspaceHandle {
                                     return Err(
                                         xai_tool_runtime::ToolError::service_unavailable(
                                             format!(
-                                                "session rebind raced teardown for `{sid_str}`; retry"
-                                            ),
+                                            "session rebind raced teardown for `{sid_str}`; retry"
+                                        ),
                                         ),
                                     );
                                 }
@@ -3052,7 +3162,7 @@ impl WorkspaceHandle {
                         }
                         Err(e) => {
                             tracing::error!(
-                                session_id = % sid_str, error = % e,
+                                session_id = %sid_str, error = %e,
                                 "failed to create workspace session for hub bind"
                             );
                             WORKSPACE_BIND_FAILED_TOTAL
@@ -3083,12 +3193,13 @@ impl WorkspaceHandle {
                             && reason == "missing_tool_config";
                         if skip_zero_metric {
                             tracing::info!(
-                                session_id = % sid_str, reason,
+                                session_id = %sid_str,
+                                reason,
                                 "session.bind: advertising zero model-facing tools (rpc_only)"
                             );
                         } else {
                             tracing::warn!(
-                                session_id = % sid_str,
+                                session_id = %sid_str,
                                 "session.bind: advertising zero model-facing tools (RPC handler only)"
                             );
                             WORKSPACE_BIND_ZERO_TOOLS_TOTAL
@@ -3107,13 +3218,16 @@ impl WorkspaceHandle {
                         WORKSPACE_BIND_UNSERVED_TOOLS_TOTAL
                             .inc_by(unserved_tool_ids.len() as u64);
                         tracing::warn!(
-                            session_id = % sid_str, unserved = ? unserved_tool_ids,
+                            session_id = %sid_str,
+                            unserved = ?unserved_tool_ids,
                             "session.bind: serving partial pinned toolset"
                         );
                     }
                     tracing::info!(
-                        session_id = % sid_str, advertised = advertised.len(), tools = ?
-                        advertised, unserved = ? unserved_tool_ids,
+                        session_id = %sid_str,
+                        advertised = advertised.len(),
+                        tools = ?advertised,
+                        unserved = ?unserved_tool_ids,
                         "session.bind: advertising finalized session toolset"
                     );
                     Ok(xai_computer_hub_sdk::ResolvedSessionHandlers {
@@ -3140,6 +3254,7 @@ impl WorkspaceHandle {
     pub async fn connect_hub(&self) -> WorkspaceResult<()> {
         use crate::hub::{HubHandle, apply_tools_changed, hub_result};
         tracing::info!("WorkspaceHandle::connect_hub — starting");
+        let connect_hub_started = std::time::Instant::now();
         let hub_config = match &self.shared.hub_config {
             Some(c) => {
                 let mut cfg = c.clone();
@@ -3155,10 +3270,9 @@ impl WorkspaceHandle {
         if hub_guard.is_some() {
             return Ok(());
         }
-        tracing::info!(
-            url = % hub_config.url, "WorkspaceHandle::connect_hub — connecting to hub"
-        );
-        let (template_handlers, rpc_tool_id) = {
+        tracing::info!(url = %hub_config.url, "WorkspaceHandle::connect_hub — connecting to hub");
+        let catalog_started = std::time::Instant::now();
+        let catalog_result = (|| -> WorkspaceResult<_> {
             let session_env = Arc::new(std::collections::HashMap::new());
             let mcp_snapshot = self.shared.mcp_tools_snapshot.load_full();
             let hub_snapshot = self.shared.hub_tools_snapshot.load_full();
@@ -3186,26 +3300,60 @@ impl WorkspaceHandle {
             let rpc_tool_id = rpc_handler.tool_id();
             handlers.push(rpc_handler);
             tracing::info!(
-                tool_count = handlers.len(), tools = ? tool_names,
+                tool_count = handlers.len(),
+                tools = ?tool_names,
                 "Registering server tool catalog on hub"
             );
-            (handlers, rpc_tool_id)
+            Ok((handlers, rpc_tool_id))
+        })();
+        let tool_catalog_secs = catalog_started.elapsed().as_secs_f64();
+        let (template_handlers, rpc_tool_id) = match catalog_result {
+            Ok(v) => {
+                observe_connect_hub_catalog_result(true, tool_catalog_secs, 0.0);
+                v
+            }
+            Err(e) => {
+                observe_connect_hub_catalog_result(
+                    false,
+                    tool_catalog_secs,
+                    connect_hub_started.elapsed().as_secs_f64(),
+                );
+                return Err(e);
+            }
         };
         let catalog: Arc<Vec<Arc<dyn xai_computer_hub_sdk::ToolServerHandler>>> =
             Arc::new(template_handlers.clone());
         let resolver = self.session_bind_resolver(catalog, rpc_tool_id);
-        let mut handle = hub_result(
-            HubHandle::connect(
-                &hub_config,
-                self.shared.status_config.ws_ping,
-                self.shared.status_config.ws_reconnect_backoff.clone(),
-                template_handlers,
-                self.shared.server_metadata.clone(),
-                Some(resolver),
-            )
-            .await,
-        )?;
-        tracing::info!("WorkspaceHandle::connect_hub — connected, starting server + listeners");
+        let hub_ws_started = std::time::Instant::now();
+        let connect_result = HubHandle::connect(
+            &hub_config,
+            self.shared.status_config.ws_ping,
+            self.shared.status_config.ws_reconnect_backoff.clone(),
+            template_handlers,
+            self.shared.server_metadata.clone(),
+            Some(resolver),
+        )
+        .await;
+        let hub_ws_connect_secs = hub_ws_started.elapsed().as_secs_f64();
+        let connect_hub_secs = connect_hub_started.elapsed().as_secs_f64();
+        let connect_outcome = if connect_result.is_ok() {
+            STARTUP_OUTCOME_OK
+        } else {
+            STARTUP_OUTCOME_ERROR
+        };
+        observe_startup_stage(
+            STARTUP_STAGE_HUB_WS_CONNECT,
+            connect_outcome,
+            hub_ws_connect_secs,
+        );
+        observe_startup_stage(STARTUP_STAGE_CONNECT_HUB, connect_outcome, connect_hub_secs);
+        let mut handle = hub_result(connect_result)?;
+        tracing::info!(
+            tool_catalog_secs,
+            hub_ws_connect_secs,
+            connect_hub_secs,
+            "WorkspaceHandle::connect_hub — connected, starting server + listeners"
+        );
         let (activity_notify_handle, activity_notify_rx) =
             xai_grok_tools::notification::types::ToolNotificationHandle::channel();
         let activity_feed_task = tokio::spawn(run_activity_feed(
@@ -3219,9 +3367,7 @@ impl WorkspaceHandle {
         let server = handle.server.clone();
         let server_task = tokio::spawn(async move {
             if let Err(e) = server.run().await {
-                tracing::warn!(
-                    error = % e, "hub tool server run loop exited with error"
-                );
+                tracing::warn!(error = %e, "hub tool server run loop exited with error");
             }
         });
         handle.set_server_task(server_task);
@@ -3278,14 +3424,9 @@ impl WorkspaceHandle {
                         if let Err(e) = server_for_events.send_notification(frame).await {
                             consecutive_errors += 1;
                             if consecutive_errors <= hub_warn_threshold {
-                                tracing::warn!(
-                                    error = % e, "failed to send workspace event to hub"
-                                );
+                                tracing::warn!(error = %e, "failed to send workspace event to hub");
                             } else {
-                                tracing::debug!(
-                                    error = % e, consecutive = consecutive_errors,
-                                    "workspace event send failed (backoff)"
-                                );
+                                tracing::debug!(error = %e, consecutive = consecutive_errors, "workspace event send failed (backoff)");
                             }
                             tokio::time::sleep(hub_backoff(hub_backoff_base, consecutive_errors))
                                 .await;
@@ -3320,18 +3461,14 @@ impl WorkspaceHandle {
                 let params = match serde_json::to_value(&payload) {
                     Ok(v) => v,
                     Err(e) => {
-                        tracing::warn!(
-                            error = % e, "failed to serialize tool server status"
-                        );
+                        tracing::warn!(error = %e, "failed to serialize tool server status");
                         return None;
                     }
                 };
                 let request_id = match conn.try_alloc_request_id() {
                     Ok(id) => id,
                     Err(e) => {
-                        tracing::warn!(
-                            error = % e, "failed to alloc request id for status"
-                        );
+                        tracing::warn!(error = %e, "failed to alloc request id for status");
                         return None;
                     }
                 };
@@ -3345,7 +3482,7 @@ impl WorkspaceHandle {
                     params,
                 };
                 if let Err(e) = conn.call_request(request_id, &req).await {
-                    tracing::debug!(error = % e, "tool_server.status send failed");
+                    tracing::debug!(error = %e, "tool_server.status send failed");
                     return Some(false);
                 }
                 Some(true)
@@ -3379,16 +3516,30 @@ impl WorkspaceHandle {
                 let mut any_attempt = false;
                 let mut any_success = false;
                 let session_ids = tracker_for_status.known_sessions();
-                for sid in &session_ids {
+                let mut publish = session_ids.clone();
+                for sid in last_sent.keys().filter_map(|k| k.as_ref()) {
+                    if !publish.contains(sid) {
+                        publish.push(sid.clone());
+                    }
+                }
+                let mut closed: Vec<String> = Vec::new();
+                for sid in &publish {
                     let payload = tracker_for_status.snapshot_session(sid);
                     let key = Some(sid.clone());
+                    let ended = !session_ids.iter().any(|s| s == sid);
                     if last_sent.get(&key).map(dedup_key) == Some(dedup_key(&payload)) {
+                        if ended {
+                            closed.push(sid.clone());
+                        }
                         continue;
                     }
                     if let Some(ok) = send_status(&server_conn, payload.clone()).await {
                         any_attempt = true;
                         if ok {
                             any_success = true;
+                            if ended {
+                                closed.push(sid.clone());
+                            }
                             last_sent.insert(key, payload);
                             last_successful_send = std::time::Instant::now();
                         }
@@ -3396,7 +3547,10 @@ impl WorkspaceHandle {
                 }
                 last_sent.retain(|k, _| match k {
                     None => true,
-                    Some(sid) => session_ids.iter().any(|s| s == sid),
+                    Some(sid) => {
+                        session_ids.iter().any(|s| s == sid)
+                            || (any_success && !closed.contains(sid))
+                    }
                 });
                 let payload = tracker_for_status.snapshot();
                 let needs_send = last_sent.get(&None).map(dedup_key) != Some(dedup_key(&payload));
@@ -3444,7 +3598,7 @@ impl WorkspaceHandle {
                         )
                         .expect("constant tool id"),
                         "client_ext_notification",
-                        serde_json::json!({ "method" : method, "params" : params }),
+                        serde_json::json!({ "method": method, "params": params }),
                     );
                     let _ = server_for_ext.send_notification(frame).await;
                 }
@@ -3488,7 +3642,7 @@ fn build_session_routed_handlers(
     for def in toolset.tool_definitions() {
         if !seen.insert(def.function.name.clone()) {
             tracing::warn!(
-                tool = % def.function.name,
+                tool = %def.function.name,
                 "duplicate client name in finalized toolset; skipping"
             );
             continue;
@@ -3510,7 +3664,8 @@ fn build_session_routed_handlers(
             }
             Err(e) => {
                 tracing::warn!(
-                    tool = % def.function.name, error = % e,
+                    tool = %def.function.name,
+                    error = %e,
                     "client name is not a valid ToolId; skipping hub registration"
                 );
             }
@@ -3690,9 +3845,7 @@ fn write_draining_marker(path: &std::path::Path, outstanding: usize) {
         })
         .and_then(|()| std::fs::rename(&tmp, path));
     if let Err(e) = result {
-        tracing::warn!(
-            path = % path.display(), error = % e, "failed to write drain marker"
-        );
+        tracing::warn!(path = %path.display(), error = %e, "failed to write drain marker");
         let _ = std::fs::remove_file(&tmp);
     }
 }
@@ -3763,6 +3916,7 @@ pub async fn connect_local_workspace(
     confine_fs_to_workspace_root: bool,
 ) -> WorkspaceResult<WorkspaceHandle> {
     use crate::session::tool_config::WorkspaceSessionContextFactory;
+    let time_to_ready_started = std::time::Instant::now();
     let identity: crate::upload::environment::WorkspaceIdentity =
         auth.identity().map(Into::into).unwrap_or_default();
     let workspace_home = resolve_workspace_home();
@@ -3830,11 +3984,20 @@ pub async fn connect_local_workspace(
         trace_source,
         xai_file_utils::queue::UploadRetryPolicy::default(),
     ));
-    if data_collection_disabled {
-        crate::recovery::purge_spilled_items(&workspace_home);
-    } else {
-        let report = crate::recovery::run_startup_recovery(&workspace_home, &upload_queue).await;
-        tracing::info!(?report, "workspace startup restart-recovery scan complete");
+    {
+        let recovery_started = std::time::Instant::now();
+        if data_collection_disabled {
+            crate::recovery::purge_spilled_items(&workspace_home);
+        } else {
+            let report =
+                crate::recovery::run_startup_recovery(&workspace_home, &upload_queue).await;
+            tracing::info!(?report, "workspace startup restart-recovery scan complete");
+        }
+        observe_startup_stage(
+            STARTUP_STAGE_STARTUP_RECOVERY,
+            STARTUP_OUTCOME_OK,
+            recovery_started.elapsed().as_secs_f64(),
+        );
     }
     upload_queue.cleanup_orphans(xai_file_utils::queue::DEFAULT_MAX_AGE);
     crate::upload::spawn_queue_stats_sampler(
@@ -3851,6 +4014,9 @@ pub async fn connect_local_workspace(
             .await;
         });
     }
+    tokio::task::spawn_blocking(|| {
+        crate::worktree::run_auto_gc_best_effort();
+    });
     let ws_handle = WorkspaceHandle::new_with_data_collection(
         ws_config,
         workspace_home,
@@ -3860,7 +4026,17 @@ pub async fn connect_local_workspace(
         identity,
     )
     .map_err(|e| WorkspaceError::HubError(format!("failed to create workspace: {e}")))?;
-    ws_handle.connect_hub().await?;
+    let connect_result = ws_handle.connect_hub().await;
+    observe_startup_stage(
+        STARTUP_STAGE_TIME_TO_READY,
+        if connect_result.is_ok() {
+            STARTUP_OUTCOME_OK
+        } else {
+            STARTUP_OUTCOME_ERROR
+        },
+        time_to_ready_started.elapsed().as_secs_f64(),
+    );
+    connect_result?;
     Ok(ws_handle)
 }
 /// Resolve `$GROK_WORKSPACE_HOME` — the workspace-owned on-disk state root.
@@ -3878,24 +4054,28 @@ pub fn resolve_workspace_home() -> std::path::PathBuf {
     xai_grok_config::grok_home().join("workspace")
 }
 /// Skill `ignore` entries for the allow-list: subdirs of `dir` not in the
-/// comma-separated list (`bundled__` prefix optional). Blank list → none;
-/// unreadable `dir` → ignore `dir` itself (fail closed).
+/// comma-separated list (`bundled__` prefix optional). Unreadable `dir` fails
+/// closed (ignore `dir` itself).
+///
+/// Unset and set-but-empty differ: unset means no filtering at all, empty means
+/// advertise none. The sandbox service relies on that to forward the tri-state
+/// of `AgentSandboxStartRequest.bundled_skills`.
 fn bundled_allowlist_ignore_dirs(dir: &str, allowlist: Option<&str>) -> Vec<String> {
+    let Some(allowlist) = allowlist else {
+        return vec![];
+    };
     let allowed: std::collections::HashSet<&str> = allowlist
-        .unwrap_or_default()
         .split(',')
         .map(|s| s.trim())
         .map(|s| s.strip_prefix("bundled__").unwrap_or(s))
         .filter(|s| !s.is_empty())
         .collect();
-    if allowed.is_empty() {
-        return vec![];
-    }
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) => {
             tracing::warn!(
-                dir, % err,
+                dir,
+                %err,
                 "bundled skills dir unreadable; allow-list ignores the whole dir"
             );
             return vec![dir.to_string()];
@@ -4013,15 +4193,21 @@ async fn enqueue_workspace_tool_definitions(
     match &outcome {
         EnqueueOutcome::Enqueued
         | EnqueueOutcome::FellBackToInline
-        | EnqueueOutcome::Deduplicated => {
+        | EnqueueOutcome::Deduplicated
+        | EnqueueOutcome::Skipped { .. } => {
             tracing::info!(
-                % session_id, object_path = % object_path, bytes = bytes.len(), outcome =
-                ? outcome, "workspace: tool definitions enqueued"
+                %session_id,
+                object_path = %object_path,
+                bytes = bytes.len(),
+                outcome = ?outcome,
+                "workspace: tool definitions enqueued"
             );
         }
         EnqueueOutcome::Failed { reason } => {
             tracing::warn!(
-                % session_id, object_path = % object_path, error = % reason,
+                %session_id,
+                object_path = %object_path,
+                error = %reason,
                 "workspace: tool definitions enqueue failed"
             );
         }
@@ -4105,8 +4291,9 @@ async fn await_enqueue_outcome(
 /// Reduce the two per-phase [`EnqueueOutcome`]s to the wire ack triple.
 /// `artifact_count` counts only durably-spilled phases (`FellBackToInline` is
 /// a success for `status` but not durable, so it does not count); any `Failed`
-/// wins the `status`, carrying the first failure reason. `Skipped` is never
-/// produced here — the no-queue case is handled by [`resolve_after_turn_ack`].
+/// wins the `status`, carrying the first failure reason. [`EnqueueOutcome::Skipped`]
+/// (e.g. collect deadline) is a non-failure and not a durable enqueue. The
+/// no-handle case is handled by [`resolve_after_turn_ack`].
 fn reduce_enqueue_outcomes(
     before: &EnqueueOutcome,
     after: &EnqueueOutcome,
@@ -4115,7 +4302,10 @@ fn reduce_enqueue_outcomes(
     let artifact_count = durable(before) as u32 + durable(after) as u32;
     let first_failure = [before, after].into_iter().find_map(|o| match o {
         EnqueueOutcome::Failed { reason } => Some(reason.clone()),
-        _ => None,
+        EnqueueOutcome::Enqueued
+        | EnqueueOutcome::FellBackToInline
+        | EnqueueOutcome::Deduplicated
+        | EnqueueOutcome::Skipped { .. } => None,
     });
     match first_failure {
         Some(reason) => (AfterTurnAckStatus::Failed, artifact_count, Some(reason)),
@@ -4224,23 +4414,53 @@ impl xai_tool_runtime::ToolDyn for SessionToolHandle {
         let tool_name = self.name().to_owned();
         let session_label = self.session_id.clone();
         tracing::debug!(
-            tool = % self.name(), call_id = % call_id, session = % self.session_id,
+            tool = %self.name(),
+            call_id = %call_id,
+            session = %self.session_id,
             "local harness: dispatching tool call"
         );
         let inner = toolset.call_streaming(self.name(), args, &call_id, None);
         Box::pin(async_stream::stream! {
-            use futures::StreamExt; let mut inner = inner; while let Some(item) =
-            inner.next(). await { match item { ToolStreamItem::Progress(p) => { yield
-            ToolStreamItem::Progress(p); } ToolStreamItem::Terminal(Ok(run_result))
-            => { yield ToolStreamItem::Terminal(Ok(run_result
-            .into_typed_tool_output(tool_id),)); return; }
-            ToolStreamItem::Terminal(Err(e)) => { tracing::error!(tool = % tool_name,
-            session = % session_label, error = % e,
-            "local harness tool call failed"); yield
-            ToolStreamItem::Terminal(Err(ToolError::new(ToolErrorKind::TerminalError,
-            e.to_string(),))); return; } } } yield
-            ToolStreamItem::Terminal(Err(ToolError::new(ToolErrorKind::TerminalError,
-            "tool stream ended without a terminal",)));
+            use futures::StreamExt;
+            let mut inner = inner;
+            while let Some(item) = inner.next().await {
+                match item {
+                    // Rollout gate lives downstream in the sampler.
+                    ToolStreamItem::Progress(p) => {
+                        yield ToolStreamItem::Progress(p);
+                    }
+                    ToolStreamItem::Terminal(Ok(run_result)) => {
+                        yield ToolStreamItem::Terminal(Ok(
+                            run_result.into_typed_tool_output(tool_id),
+                        ));
+                        return;
+                    }
+                    ToolStreamItem::Terminal(Err(e)) => {
+                        tracing::error!(
+                            tool = %tool_name,
+                            session = %session_label,
+                            error = %e,
+                            "local harness tool call failed"
+                        );
+                        yield ToolStreamItem::Terminal(Err(ToolError::new(
+                            ToolErrorKind::TerminalError,
+                            e.to_string(),
+                        )));
+                        return;
+                    }
+                }
+            }
+            // Defensive fallback: every terminal arm above `return`s, so this
+            // is only reached if the inner `call_streaming` stream ended
+            // without a terminal. That is unreachable under the
+            // `call_streaming` contract (it yields exactly one terminal on
+            // every code path), but emit a terminal here anyway so the
+            // "exactly one Terminal" invariant is enforced locally rather
+            // than merely inherited from the inner layer.
+            yield ToolStreamItem::Terminal(Err(ToolError::new(
+                ToolErrorKind::TerminalError,
+                "tool stream ended without a terminal",
+            )));
         })
     }
 }
@@ -4273,7 +4493,8 @@ impl WorkspaceHandle {
                 }
                 Err(e) => {
                     tracing::warn!(
-                        tool = % def.function.name, error = % e,
+                        tool = %def.function.name,
+                        error = %e,
                         "client name is not a valid ToolId; skipping local-harness registration"
                     );
                 }
@@ -4421,6 +4642,12 @@ pub(crate) mod tests {
             false,
         )
     }
+    /// [`make_handle`] with an explicit [`crate::StatusConfig`].
+    pub(crate) fn make_handle_with_status_config(
+        status_config: crate::StatusConfig,
+    ) -> WorkspaceHandle {
+        make_handle_inner(false, false, status_config, false)
+    }
     fn make_handle_inner(
         rewind_all_outcomes: bool,
         require_explicit_toolset: bool,
@@ -4530,7 +4757,7 @@ pub(crate) mod tests {
             .register_tool(
                 BASH_CCO_STUB_NAME.to_owned(),
                 BashCcoStub,
-                Some(serde_json::json!({ "type" : "object", "properties" : {} })),
+                Some(serde_json::json!({"type": "object", "properties": {}})),
             )
             .expect("register bash_cco_stub");
     }
@@ -5291,6 +5518,7 @@ pub(crate) mod tests {
             foreground_block_budget: None,
             kind: xai_grok_tools::computer::types::TaskKind::Bash,
             owner_session_id: None,
+            description: None,
         }
     }
     /// Start a `sleep 30` background task on `session`'s owned backend and
@@ -5480,8 +5708,7 @@ pub(crate) mod tests {
             .await
             .expect_err("update_tool_config must refuse an externally-owned toolset");
         assert!(
-            matches!(err, crate ::error::WorkspaceError::ToolsetExternallyOwned(ref s) if
-            s == "local"),
+            matches!(err, crate::error::WorkspaceError::ToolsetExternallyOwned(ref s) if s == "local"),
             "expected ToolsetExternallyOwned, got: {err:?}"
         );
         assert!(
@@ -5901,7 +6128,7 @@ pub(crate) mod tests {
             .toolset()
             .call(
                 "get_task_output",
-                serde_json::json!({ "task_ids" : [bg.task_id.clone()] }),
+                serde_json::json!({"task_ids": [bg.task_id.clone()]}),
                 "restart-probe",
                 None,
             )
@@ -5986,12 +6213,12 @@ pub(crate) mod tests {
         assert!(handle.has_client_ext_sink());
         handle.emit_client_ext(
             "x.ai/search/fuzzy/status".to_string(),
-            serde_json::json!({ "a" : 1 }),
+            serde_json::json!({"a": 1}),
         );
         let got = captured.lock();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, "x.ai/search/fuzzy/status");
-        assert_eq!(got[0].1, serde_json::json!({ "a" : 1 }));
+        assert_eq!(got[0].1, serde_json::json!({"a": 1}));
     }
     /// End-to-end local streaming: open + change a fuzzy search over real files,
     /// run the notification driver, and assert a correctly-shaped
@@ -6689,9 +6916,10 @@ pub(crate) mod tests {
             plugin_discovery_config: Default::default(),
             hub_config: None,
             auth_provider: None,
-            server_metadata: Some(
-                serde_json::json!({ "sandbox_id" : "sb_test123", "mode" : "remote", }),
-            ),
+            server_metadata: Some(serde_json::json!({
+                "sandbox_id": "sb_test123",
+                "mode": "remote",
+            })),
             status_config: Default::default(),
             project_lsp_trusted: true,
             require_explicit_toolset: false,
@@ -7420,6 +7648,7 @@ pub(crate) mod tests {
                 timeout_ms: 10_000,
                 source_dir: std::path::PathBuf::from("/tmp"),
                 extra_env: std::collections::HashMap::new(),
+                layer: xai_grok_hooks::config::HookProvenance::File,
             };
             handle.shared.hook_registry.write().append_specs(vec![spec]);
         }
@@ -7609,12 +7838,233 @@ pub(crate) mod tests {
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].id, "hub:remote_exec");
     }
+    #[test]
+    fn startup_stage_observe_records_independent_samples() {
+        let recovery_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[
+                super::STARTUP_STAGE_STARTUP_RECOVERY,
+                super::STARTUP_OUTCOME_OK,
+            ])
+            .get_sample_count();
+        let catalog_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[super::STARTUP_STAGE_TOOL_CATALOG, super::STARTUP_OUTCOME_OK])
+            .get_sample_count();
+        let hub_ok_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[
+                super::STARTUP_STAGE_HUB_WS_CONNECT,
+                super::STARTUP_OUTCOME_OK,
+            ])
+            .get_sample_count();
+        let hub_err_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[
+                super::STARTUP_STAGE_HUB_WS_CONNECT,
+                super::STARTUP_OUTCOME_ERROR,
+            ])
+            .get_sample_count();
+        super::observe_startup_stage(
+            super::STARTUP_STAGE_STARTUP_RECOVERY,
+            super::STARTUP_OUTCOME_OK,
+            0.42,
+        );
+        super::observe_startup_stage(
+            super::STARTUP_STAGE_HUB_WS_CONNECT,
+            super::STARTUP_OUTCOME_ERROR,
+            12.5,
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_STARTUP_RECOVERY,
+                    super::STARTUP_OUTCOME_OK
+                ])
+                .get_sample_count(),
+            recovery_before + 1
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_HUB_WS_CONNECT,
+                    super::STARTUP_OUTCOME_ERROR
+                ])
+                .get_sample_count(),
+            hub_err_before + 1
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_HUB_WS_CONNECT,
+                    super::STARTUP_OUTCOME_OK
+                ])
+                .get_sample_count(),
+            hub_ok_before,
+            "error sample must not advance ok hub_ws_connect"
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[super::STARTUP_STAGE_TOOL_CATALOG, super::STARTUP_OUTCOME_OK])
+                .get_sample_count(),
+            catalog_before,
+            "observing recovery/hub must not sample tool_catalog"
+        );
+    }
     #[tokio::test]
     async fn connect_hub_noop_when_no_config() {
+        let catalog_ok_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[super::STARTUP_STAGE_TOOL_CATALOG, super::STARTUP_OUTCOME_OK])
+            .get_sample_count();
+        let catalog_err_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[
+                super::STARTUP_STAGE_TOOL_CATALOG,
+                super::STARTUP_OUTCOME_ERROR,
+            ])
+            .get_sample_count();
+        let connect_ok_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[super::STARTUP_STAGE_CONNECT_HUB, super::STARTUP_OUTCOME_OK])
+            .get_sample_count();
+        let connect_err_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[
+                super::STARTUP_STAGE_CONNECT_HUB,
+                super::STARTUP_OUTCOME_ERROR,
+            ])
+            .get_sample_count();
+        let hub_ok_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[
+                super::STARTUP_STAGE_HUB_WS_CONNECT,
+                super::STARTUP_OUTCOME_OK,
+            ])
+            .get_sample_count();
         let handle = make_handle();
         let result = handle.connect_hub().await;
         assert!(result.is_ok());
         assert!(handle.shared().hub_server().is_none());
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[super::STARTUP_STAGE_TOOL_CATALOG, super::STARTUP_OUTCOME_OK])
+                .get_sample_count(),
+            catalog_ok_before,
+            "no-hub-config noop must not sample tool_catalog"
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_TOOL_CATALOG,
+                    super::STARTUP_OUTCOME_ERROR
+                ])
+                .get_sample_count(),
+            catalog_err_before
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[super::STARTUP_STAGE_CONNECT_HUB, super::STARTUP_OUTCOME_OK])
+                .get_sample_count(),
+            connect_ok_before
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_CONNECT_HUB,
+                    super::STARTUP_OUTCOME_ERROR
+                ])
+                .get_sample_count(),
+            connect_err_before
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_HUB_WS_CONNECT,
+                    super::STARTUP_OUTCOME_OK
+                ])
+                .get_sample_count(),
+            hub_ok_before
+        );
+    }
+    #[test]
+    fn observe_connect_hub_catalog_result_records_error_pair() {
+        let catalog_ok_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[super::STARTUP_STAGE_TOOL_CATALOG, super::STARTUP_OUTCOME_OK])
+            .get_sample_count();
+        let catalog_err_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[
+                super::STARTUP_STAGE_TOOL_CATALOG,
+                super::STARTUP_OUTCOME_ERROR,
+            ])
+            .get_sample_count();
+        let connect_err_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[
+                super::STARTUP_STAGE_CONNECT_HUB,
+                super::STARTUP_OUTCOME_ERROR,
+            ])
+            .get_sample_count();
+        let connect_ok_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[super::STARTUP_STAGE_CONNECT_HUB, super::STARTUP_OUTCOME_OK])
+            .get_sample_count();
+        let hub_before = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[
+                super::STARTUP_STAGE_HUB_WS_CONNECT,
+                super::STARTUP_OUTCOME_ERROR,
+            ])
+            .get_sample_count();
+        super::observe_connect_hub_catalog_result(false, 0.03, 0.11);
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_TOOL_CATALOG,
+                    super::STARTUP_OUTCOME_ERROR
+                ])
+                .get_sample_count(),
+            catalog_err_before + 1
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_CONNECT_HUB,
+                    super::STARTUP_OUTCOME_ERROR
+                ])
+                .get_sample_count(),
+            connect_err_before + 1
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[super::STARTUP_STAGE_TOOL_CATALOG, super::STARTUP_OUTCOME_OK])
+                .get_sample_count(),
+            catalog_ok_before
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[super::STARTUP_STAGE_CONNECT_HUB, super::STARTUP_OUTCOME_OK])
+                .get_sample_count(),
+            connect_ok_before
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_HUB_WS_CONNECT,
+                    super::STARTUP_OUTCOME_ERROR
+                ])
+                .get_sample_count(),
+            hub_before,
+            "catalog failure must not sample hub_ws_connect"
+        );
+        let catalog_ok_mid = super::STARTUP_STAGE_DURATION_SECONDS
+            .with_label_values(&[super::STARTUP_STAGE_TOOL_CATALOG, super::STARTUP_OUTCOME_OK])
+            .get_sample_count();
+        super::observe_connect_hub_catalog_result(true, 0.02, 0.0);
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[super::STARTUP_STAGE_TOOL_CATALOG, super::STARTUP_OUTCOME_OK])
+                .get_sample_count(),
+            catalog_ok_mid + 1
+        );
+        assert_eq!(
+            super::STARTUP_STAGE_DURATION_SECONDS
+                .with_label_values(&[
+                    super::STARTUP_STAGE_CONNECT_HUB,
+                    super::STARTUP_OUTCOME_ERROR
+                ])
+                .get_sample_count(),
+            connect_err_before + 1,
+            "catalog ok must not sample connect_hub error"
+        );
     }
     #[test]
     fn workspace_shared_auth_provider_uses_workspace_config() {
@@ -8088,10 +8538,9 @@ pub(crate) mod tests {
         let resolver = bind_resolver_fixture(&handle);
         let resolved = resolver(
             xai_tool_protocol::SessionId::new("bind-e2e-strict").unwrap(),
-            Some(serde_json::json!(
-                { "metadata" : { "preset" : "grok-computer", "capability_mode" :
-                "all" }, }
-            )),
+            Some(serde_json::json!({
+                "metadata": {"preset": "grok-computer", "capability_mode": "all"},
+            })),
         )
         .await
         .expect("bind must succeed");
@@ -8116,10 +8565,13 @@ pub(crate) mod tests {
         let resolver = bind_resolver_fixture(&handle);
         let resolved = resolver(
             xai_tool_protocol::SessionId::new("bind-e2e-rpc-only").unwrap(),
-            Some(serde_json::json!(
-                { "metadata" : { "capability_mode" : "read_write", "rpc_only" :
-                true, "system_notifications" : true, }, }
-            )),
+            Some(serde_json::json!({
+                "metadata": {
+                    "capability_mode": "read_write",
+                    "rpc_only": true,
+                    "system_notifications": true,
+                },
+            })),
         )
         .await
         .expect("bind must succeed");
@@ -8138,10 +8590,9 @@ pub(crate) mod tests {
         let resolver = bind_resolver_fixture(&handle);
         let resolved = resolver(
             xai_tool_protocol::SessionId::new("bind-e2e-tools").unwrap(),
-            Some(serde_json::json!(
-                { "metadata" : { "tools" : [{ "id" : "GrokBuild:read_file" }] },
-                }
-            )),
+            Some(serde_json::json!({
+                "metadata": {"tools": [{"id": "GrokBuild:read_file"}]},
+            })),
         )
         .await
         .expect("bind must succeed");
@@ -8182,20 +8633,18 @@ pub(crate) mod tests {
         let sid = xai_tool_protocol::SessionId::new("bind-e2e-rejected").unwrap();
         let first = resolver(
             sid.clone(),
-            Some(serde_json::json!(
-                { "metadata" : { "tools" : [{ "id" : "GrokBuild:read_file" }] },
-                }
-            )),
+            Some(serde_json::json!({
+                "metadata": {"tools": [{"id": "GrokBuild:read_file"}]},
+            })),
         )
         .await
         .expect("healthy bind");
         assert_eq!(first.resolve_error, None);
         let second = resolver(
             sid,
-            Some(serde_json::json!(
-                { "metadata" : { "tools" : [{ "id" : "GrokBuild:read_file",
-                "params_json" : "{not json" }] }, }
-            )),
+            Some(serde_json::json!({
+                "metadata": {"tools": [{"id": "GrokBuild:read_file", "params_json": "{not json"}]},
+            })),
         )
         .await
         .expect("rejected rebind still advertises the previous toolset");
@@ -8217,19 +8666,18 @@ pub(crate) mod tests {
         let sid = xai_tool_protocol::SessionId::new("bind-e2e-rpc-only").unwrap();
         let first = resolver(
             sid.clone(),
-            Some(serde_json::json!(
-                { "metadata" : { "tools" : [{ "id" : "GrokBuild:read_file" }] },
-                }
-            )),
+            Some(serde_json::json!({
+                "metadata": {"tools": [{"id": "GrokBuild:read_file"}]},
+            })),
         )
         .await
         .expect("agent bind");
         assert!(handler_names(&first).iter().any(|n| n == "read_file"));
         let rpc_bind = resolver(
             sid,
-            Some(serde_json::json!(
-                { "metadata" : { "tool_config" : { "tools" : [] } }, }
-            )),
+            Some(serde_json::json!({
+                "metadata": {"tool_config": {"tools": []}},
+            })),
         )
         .await
         .expect("rpc-only rebind");
@@ -8249,17 +8697,16 @@ pub(crate) mod tests {
         let sid = xai_tool_protocol::SessionId::new("bind-e2e-heal").unwrap();
         let first = resolver(
             sid.clone(),
-            Some(serde_json::json!({ "metadata" : { "preset" : "grok-computer" } })),
+            Some(serde_json::json!({"metadata": {"preset": "grok-computer"}})),
         )
         .await
         .expect("fail-closed bind still succeeds with an RPC-only advertise");
         assert!(first.resolve_error.is_some(), "first bind must fail closed");
         let second = resolver(
             sid,
-            Some(serde_json::json!(
-                { "metadata" : { "tools" : [{ "id" : "GrokBuild:read_file" }] },
-                }
-            )),
+            Some(serde_json::json!({
+                "metadata": {"tools": [{"id": "GrokBuild:read_file"}]},
+            })),
         )
         .await
         .expect("bind must succeed");
@@ -8276,11 +8723,17 @@ pub(crate) mod tests {
     /// Owner bind: capability `all` + explicit toolset (strict servers fail
     /// closed otherwise).
     fn owner_full_bind_metadata() -> serde_json::Value {
-        serde_json::json!(
-            { "metadata" : { "capability_mode" : "all", "tools" : [{ "id" :
-            "GrokBuild:read_file" }, { "id" : "GrokBuild:search_replace" }, { "id" :
-            "GrokBuild:grep" }, { "id" : "GrokBuild:list_dir" },], }, }
-        )
+        serde_json::json!({
+            "metadata": {
+                "capability_mode": "all",
+                "tools": [
+                    {"id": "GrokBuild:read_file"},
+                    {"id": "GrokBuild:search_replace"},
+                    {"id": "GrokBuild:grep"},
+                    {"id": "GrokBuild:list_dir"},
+                ],
+            },
+        })
     }
     const OWNER_TOOLS: [&str; 4] = ["read_file", "search_replace", "grep", "list_dir"];
     #[track_caller]
@@ -8305,17 +8758,10 @@ pub(crate) mod tests {
         assert_advertises_owner_tools(&handler_names(&owner), "owner bind");
         assert_eq!(owner.resolve_error, None);
         let consumer_shapes: Vec<Option<serde_json::Value>> = vec![
-            Some(
-                serde_json::json!({ "metadata" : { "capability_mode" : "read_only" }
-                }),
-            ),
-            Some(
-                serde_json::json!({ "metadata" : { "capability_mode" : "read_write"
-            } }),
-            ),
+            Some(serde_json::json!({"metadata": {"capability_mode": "read_only"}})),
+            Some(serde_json::json!({"metadata": {"capability_mode": "read_write"}})),
             None,
-            Some(serde_json::json!({ "metadata" : { "tool_config" : {
-            "tools" : [] } } })),
+            Some(serde_json::json!({"metadata": {"tool_config": {"tools": []}}})),
         ];
         let storm = futures::future::join_all(
             consumer_shapes
@@ -8364,9 +8810,7 @@ pub(crate) mod tests {
         let sid = xai_tool_protocol::SessionId::new("bind-e2e-restore-read-first").unwrap();
         let read_first = resolver(
             sid.clone(),
-            Some(serde_json::json!(
-                { "metadata" : { "capability_mode" : "read_only" } }
-            )),
+            Some(serde_json::json!({"metadata": {"capability_mode": "read_only"}})),
         )
         .await
         .expect("consumer-shaped bind resolves");
@@ -8401,9 +8845,7 @@ pub(crate) mod tests {
         let sid = xai_tool_protocol::SessionId::new("bind-e2e-restore-write-first").unwrap();
         resolver(
             sid.clone(),
-            Some(serde_json::json!(
-                { "metadata" : { "capability_mode" : "read_write" } }
-            )),
+            Some(serde_json::json!({"metadata": {"capability_mode": "read_write"}})),
         )
         .await
         .expect("consumer-shaped bind resolves");
@@ -8456,11 +8898,14 @@ pub(crate) mod tests {
         let handle = make_handle();
         let resolver = bind_resolver_fixture(&handle);
         let sid = xai_tool_protocol::SessionId::new("bind-e2e-bg").unwrap();
-        let bg_metadata = serde_json::json!(
-            { "metadata" : { "tools" : [{ "id" : "GrokBuild:read_file" }, { "id" :
-            "GrokBuild:run_terminal_cmd" }, { "id" : "GrokBuild:get_task_output" }, {
-            "id" : "GrokBuild:kill_task" },] }, }
-        );
+        let bg_metadata = serde_json::json!({
+            "metadata": {"tools": [
+                {"id": "GrokBuild:read_file"},
+                {"id": "GrokBuild:run_terminal_cmd"},
+                {"id": "GrokBuild:get_task_output"},
+                {"id": "GrokBuild:kill_task"},
+            ]},
+        });
         let first = resolver(sid.clone(), Some(bg_metadata.clone()))
             .await
             .expect("owner bind");
@@ -8498,10 +8943,9 @@ pub(crate) mod tests {
         );
         let swapped = resolver(
             sid,
-            Some(serde_json::json!(
-                { "metadata" : { "tools" : [{ "id" : "GrokBuild:read_file" }] },
-                }
-            )),
+            Some(serde_json::json!({
+                "metadata": {"tools": [{"id": "GrokBuild:read_file"}]},
+            })),
         )
         .await
         .expect("changed-toolset rebind");
@@ -8586,6 +9030,11 @@ pub(crate) mod tests {
             reason: reason.to_owned(),
         }
     }
+    fn skipped(reason: &str) -> EnqueueOutcome {
+        EnqueueOutcome::Skipped {
+            reason: reason.to_owned(),
+        }
+    }
     /// Both archives durably enqueued → `Enqueued`, `artifact_count == 2`.
     #[test]
     fn reduce_outcomes_both_enqueued() {
@@ -8611,6 +9060,19 @@ pub(crate) mod tests {
         assert_eq!(status, AfterTurnAckStatus::Failed);
         assert_eq!(count, 0);
         assert_eq!(msg.as_deref(), Some("before boom"));
+    }
+    /// A deliberate collect-deadline skip is not an after-turn failure.
+    #[test]
+    fn reduce_outcomes_collect_deadline_skip_is_not_failure() {
+        let (status, count, msg) =
+            reduce_enqueue_outcomes(&skipped("collect_deadline"), &skipped("collect_deadline"));
+        assert_eq!(status, AfterTurnAckStatus::Enqueued);
+        assert_eq!(count, 0);
+        assert_eq!(msg, None);
+        let (status, count, msg) = reduce_enqueue_outcomes(&enq(), &skipped("collect_deadline"));
+        assert_eq!(status, AfterTurnAckStatus::Enqueued);
+        assert_eq!(count, 1);
+        assert_eq!(msg, None);
     }
     /// Inline fallback is a success for the status but is NOT on the durable
     /// spill, so it does not add to `artifact_count`.
@@ -8881,7 +9343,7 @@ pub(crate) mod tests {
                     model_id: "grok-4".to_owned(),
                     written_repo_paths: Vec::new(),
                     cancellation_category: Some("permission_rejected".to_owned()),
-                    cancellation_context: Some(serde_json::json!({ "recovery" : false })),
+                    cancellation_context: Some(serde_json::json!({ "recovery": false })),
                 },
             )
             .await;
@@ -8896,7 +9358,7 @@ pub(crate) mod tests {
         assert_eq!(ended["cancellation_category"], "permission_rejected");
         assert_eq!(
             ended["cancellation_context"],
-            serde_json::json!({ "recovery" : false })
+            serde_json::json!({ "recovery": false })
         );
     }
     /// The default watchdog must undercut the requester's 10s hook timeout.
@@ -8913,14 +9375,34 @@ pub(crate) mod tests {
         tmp
     }
     #[test]
-    fn bundled_allowlist_blank_ignores_nothing() {
+    fn bundled_allowlist_unset_ignores_nothing() {
         let tmp = bundled_dir_fixture(&["bundled__pdf", "bundled__xlsx"]);
         let dir = tmp.path().to_string_lossy().into_owned();
-        for allowlist in [None, Some(""), Some("  "), Some(" , ,")] {
+        assert_eq!(
+            bundled_allowlist_ignore_dirs(&dir, None),
+            Vec::<String>::new(),
+            "an unset allow-list must produce no ignore entries"
+        );
+    }
+    #[test]
+    fn bundled_allowlist_empty_ignores_everything() {
+        let tmp = bundled_dir_fixture(&["bundled__pdf", "bundled__xlsx"]);
+        let dir = tmp.path().to_string_lossy().into_owned();
+        let want = vec![
+            tmp.path()
+                .join("bundled__pdf")
+                .to_string_lossy()
+                .into_owned(),
+            tmp.path()
+                .join("bundled__xlsx")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        for allowlist in ["", "  ", " , ,"] {
             assert_eq!(
-                bundled_allowlist_ignore_dirs(&dir, allowlist),
-                Vec::<String>::new(),
-                "allowlist {allowlist:?} must produce no ignore entries"
+                bundled_allowlist_ignore_dirs(&dir, Some(allowlist)),
+                want,
+                "allow-list {allowlist:?} must ignore every bundled skill"
             );
         }
     }

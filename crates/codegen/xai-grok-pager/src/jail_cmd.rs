@@ -7,9 +7,9 @@ use clap::{Args, Subcommand};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use xai_grok_sandbox::jail_catalog::{
-    FreeBsdVersion, JailProvisionPlan, JailSetupScope, PRIVILEGE_REASON, PRIVILEGE_REASON_ONE_LINE,
-    base_txz_url, catalog_index_urls, jail_userland_compatible, parse_directory_index,
-    parse_host_version, preferred_jail_base,
+    FreeBsdVersion, JailProvisionPlan, JailSetupScope, PRIVILEGE_REASON_ONE_LINE, base_txz_url,
+    catalog_index_urls, jail_userland_compatible, parse_directory_index, parse_host_version,
+    preferred_jail_base,
 };
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);

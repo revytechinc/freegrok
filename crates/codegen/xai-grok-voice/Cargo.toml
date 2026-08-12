@@ -21,6 +21,10 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+# Sanctioned TTY detach for the capture subprocesses (Linux system recorders,
+# macOS `__mic-capture` self-exec helper) — workspace rule: never spawn a raw
+# `std::process::Command`.
+xai-tty-utils = { workspace = true }
 
 [features]
 # `audio` = "microphone capture is compiled in". It's enabled on every OS for
@@ -37,10 +41,10 @@ default = ["audio"]
 default-bazel = []
 audio = ["dep:cpal"]
 
-# cpal is only used by the non-Linux capture backend. Gating it to non-Linux
-# keeps `alsa-sys` (a NEEDED `libasound.so.2`) out of the static musl build; on
-# Linux the `audio` feature compiles the subprocess recorder backend instead.
-[target.'cfg(not(target_os = "linux"))'.dependencies.cpal]
+# cpal is only used by macOS/Windows capture backends. Gating keeps
+# `alsa-sys` out of the static musl Linux build and avoids pulling cpal
+# into FreeBSD (unsupported stub backend; see `capture_unsupported`).
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies.cpal]
 version = "0.15"
 optional = true
 

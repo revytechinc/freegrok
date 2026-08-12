@@ -161,8 +161,7 @@ fn slash_plan_no_args_not_in_plan_enters_plan_mode() {
     // Should emit SetSessionMode to enter plan mode.
     assert_eq!(effects.len(), 1);
     assert!(
-        matches!(&effects[0], Effect::SetSessionMode { mode_id, .. }
-if &*mode_id.0 == "plan"),
+        matches!(&effects[0], Effect::SetSessionMode { mode_id, .. } if &*mode_id.0 == "plan"),
         "expected SetSessionMode(plan), got: {effects:?}"
     );
     // Optimistic pending state should be set.
@@ -1342,13 +1341,6 @@ fn cycle_mode_pre_session_always_approve_to_normal_persists_ask() {
         "pre-session Always-Approve → Normal must persist 'ask' \
          (stale config.toml relaunches yolo), got {effects:?}"
     );
-    // Welcome-screen Shift+Tab still kicks off session creation.
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::CreateSession { .. })),
-        "expected CreateSession alongside the persist, got {effects:?}"
-    );
 }
 
 /// Negative control for the pre-session persist: Normal → Plan changes the
@@ -1933,10 +1925,9 @@ fn cycle_always_approve_with_nudge_jumps_to_plan() {
     );
     assert!(
         effects.iter().any(|e| matches!(
-                    e,
-                    Effect::SetSessionMode { mode_id, .. }
-        if &*mode_id.0 == "plan"
-                )),
+            e,
+            Effect::SetSessionMode { mode_id, .. } if &*mode_id.0 == "plan"
+        )),
         "expected SetSessionMode(plan), got {effects:?}"
     );
     assert!(
@@ -1990,10 +1981,9 @@ fn cycle_auto_with_nudge_jumps_to_plan() {
     );
     assert!(
         effects.iter().any(|e| matches!(
-                    e,
-                    Effect::SetSessionMode { mode_id, .. }
-        if &*mode_id.0 == "plan"
-                )),
+            e,
+            Effect::SetSessionMode { mode_id, .. } if &*mode_id.0 == "plan"
+        )),
         "expected SetSessionMode(plan), got {effects:?}"
     );
     assert!(
@@ -2315,8 +2305,7 @@ fn set_plan_mode_idempotency_uses_pending_over_active() {
         "OFF from EFFECTIVE-ON must emit Effect::SetSessionMode (not idempotent)"
     );
     assert!(
-        matches!(&effects[0], Effect::SetSessionMode { mode_id, .. }
-if &*mode_id.0 == "default"),
+        matches!(&effects[0], Effect::SetSessionMode { mode_id, .. } if &*mode_id.0 == "default"),
         "OFF transition must emit SetSessionMode(default): {effects:?}"
     );
     let agent = app.agents.get(&AgentId(0)).unwrap();

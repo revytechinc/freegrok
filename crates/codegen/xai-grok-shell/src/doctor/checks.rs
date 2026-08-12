@@ -431,26 +431,11 @@ fn check_config_parse() -> CheckResult {
 }
 
 fn check_sandbox_backend() -> CheckResult {
-    #[cfg(target_os = "freebsd")]
-    let (backend, detail) = (
-        "freebsd/jail",
-        "Isolation uses FreeBSD jails via an optional privileged helper (not Landlock/Seatbelt).",
-    );
-    #[cfg(target_os = "linux")]
-    let (backend, detail) = (
-        "linux/landlock+bwrap",
-        "Isolation uses Landlock and optional bubblewrap re-exec.",
-    );
-    #[cfg(target_os = "macos")]
-    let (backend, detail) = (
-        "macos/seatbelt",
-        "Isolation uses Seatbelt profiles via nono.",
-    );
-    #[cfg(not(any(target_os = "freebsd", target_os = "linux", target_os = "macos")))]
-    let (backend, detail) = (
-        "unsupported",
-        "No OS sandbox backend for this target.",
-    );
+    // Platform (not enforce-gated host): dependents build sandbox without
+    // default features; doctor still reports the OS backend label.
+    let kind = xai_grok_sandbox::platform_backend_kind();
+    let backend = kind.as_str();
+    let detail = kind.doctor_detail();
 
     CheckResult {
         id: "sandbox.backend".into(),

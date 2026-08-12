@@ -440,6 +440,9 @@ pub(super) mod paste_key_tests {
     use super::*;
     use crate::acp::model_state::ModelState;
     use crate::app::agent::{AgentId, AgentSession, AgentState};
+    use crate::app::agent_view::test_fixtures::{
+        make_followup_permission_state, make_plan_approval_view_state,
+    };
     use crate::app::app_view::InputOutcome;
     use crate::clipboard::ImageData;
     use crate::scrollback::state::ScrollbackState;
@@ -479,6 +482,7 @@ pub(super) mod paste_key_tests {
                 bg_tool_call_to_task: std::collections::HashMap::new(),
                 scheduled_tasks: std::collections::HashMap::new(),
                 in_flight_prompt: None,
+                compact_held_prompt: None,
                 current_prompt_id: None,
                 created_via_new: false,
             },
@@ -1164,79 +1168,22 @@ pub(super) mod paste_key_tests {
             agent.question_view = Some(make_question_view_state_in_input_mode());
         });
     }
-    /// Build a `PermissionViewState` already in FollowupInput focus —
-    /// enough for the dispatcher's permission-followup paste arm.
-    pub(in crate::app::agent_view) fn make_followup_permission_state()
-    -> crate::views::permission_view::PermissionViewState {
-        let (response_tx, _rx) = tokio::sync::oneshot::channel();
-        let request = agent_client_protocol::RequestPermissionRequest::new(
-            agent_client_protocol::SessionId::new(std::sync::Arc::from("test")),
-            agent_client_protocol::ToolCallUpdate::new(
-                agent_client_protocol::ToolCallId::new(std::sync::Arc::from("call-1")),
-                agent_client_protocol::ToolCallUpdateFields::default(),
-            ),
-            vec![],
-        );
-        let perm = xai_acp_lib::AcpArgs {
-            request,
-            response_tx,
-        };
-        crate::views::permission_view::PermissionViewState {
-            request: perm,
-            id: 0,
-            focus: crate::views::permission_view::PermissionFocus::FollowupInput,
-            options: vec![],
-            active_idx: 0,
-            bash_highlights: None,
-            bash_selection_count: 0,
-            bash_command_raw: None,
-            mcp_scope: None,
-            title: String::new(),
-            description: vec![],
-            args_expanded: false,
-            desc_scroll: 0,
-            subagent_label: None,
-            options_area_height: 0,
-            options_scroll_offset: 0,
-        }
-    }
-    /// Build a minimal `PlanApprovalViewState` — enough for the
-    /// dispatcher's plan-approval-view paste arm.
-    pub(in crate::app::agent_view) fn make_plan_approval_view_state()
-    -> crate::views::plan_approval_view::PlanApprovalViewState {
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        let request = crate::views::plan_approval_view::ExitPlanModeExtRequest {
-            session_id: "test-session".into(),
-            tool_call_id: "call-1".into(),
-            plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
-        };
-        crate::views::plan_approval_view::PlanApprovalViewState::new(
-            request,
-            crate::views::prompt_widget::StashedPrompt {
-                text: String::new(),
-                cursor: 0,
-                images: Vec::new(),
-                chip_elements: Vec::new(),
-                image_counter: 0,
-                image_undo_stash: Vec::new(),
-            },
-            tx,
-        )
-    }
     /// Build a `QuestionViewState` already in `InputMode` focus.
     pub(in crate::app::agent_view) fn make_question_view_state_in_input_mode()
     -> crate::views::question_view::QuestionViewState {
-        let question =
-            xai_grok_tools::implementations::grok_build::ask_user_question::Question {
-                question: "Pick one?".to_string(),
-                options: vec![
-                xai_grok_tools::implementations::grok_build::ask_user_question::QuestionOption
-                { label : "A".to_string(), description : "Option A".to_string(), preview
-                : None, id : None, },
+        let question = xai_grok_tools::implementations::grok_build::ask_user_question::Question {
+            question: "Pick one?".to_string(),
+            options: vec![
+                xai_grok_tools::implementations::grok_build::ask_user_question::QuestionOption {
+                    label: "A".to_string(),
+                    description: "Option A".to_string(),
+                    preview: None,
+                    id: None,
+                },
             ],
-                multi_select: Some(false),
-                id: None,
-            };
+            multi_select: Some(false),
+            id: None,
+        };
         let mut state = crate::views::question_view::QuestionViewState::new(
             "tc-1".into(),
             vec![question],
@@ -2085,16 +2032,12 @@ pub(super) mod paste_key_tests {
             &mut scratch,
             None,
             false,
-            0,
-            &[],
-            &std::collections::BTreeSet::new(),
-            None,
+            crate::app::agent_view::BannerSlotParams::none(),
             &bundle,
             false,
+            false,
             &mut Vec::new(),
-            false,
-            false,
-            None,
+            crate::app::agent_view::AppRenderParams::default(),
         );
     }
     /// The scrolled-off/overlay branch of `AgentView::draw` (render.rs) must

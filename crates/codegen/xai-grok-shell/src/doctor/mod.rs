@@ -460,4 +460,5 @@ mod tests {
         assert_eq!(checks::parse_freebsd_major("bogus"), None);
         assert_eq!(checks::MIN_FREEBSD_MAJOR, 14);
     }
+
 }
