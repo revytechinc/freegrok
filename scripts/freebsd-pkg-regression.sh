@@ -60,7 +60,7 @@ run static_exists test -x /usr/local/bin/grok-build-static
 run alias_exists test -e /usr/local/bin/grok
 run helper_libexec test -x /usr/local/libexec/grok-jail-helper
 run elf sh -c 'file /usr/local/bin/grok-build | grep -qi FreeBSD'
-run version grok-build --version >/dev/null
+run version sh -c 'grok-build --version >/dev/null'
 # Capture stdout only after a successful doctor --ci (exit 0).
 if grok-build doctor --ci >"$DOC"; then
 	ok doctor_ci
@@ -73,10 +73,10 @@ if grep -E "Sandbox backend: nono-" "$DOC" >/dev/null 2>&1; then
 else
 	ok no_nono_backend
 fi
-run jail_status grok-build jail status >/dev/null
-run jail_help grok-build jail --help >/dev/null
-run mcp_list grok-build mcp list >/dev/null
-run doctor_ci_2 grok-build doctor --ci >/dev/null
+run jail_status sh -c 'grok-build jail status >/dev/null'
+run jail_help sh -c 'grok-build jail --help >/dev/null'
+run mcp_list sh -c 'grok-build mcp list >/dev/null'
+run doctor_ci_2 sh -c 'grok-build doctor --ci >/dev/null'
 
 # Packaged helper: dry-run prints a plan; --apply without GROK_JAIL_ROOT
 # is fail-closed (exit 1 unprivileged, or 3 if somehow root without a root dir).
