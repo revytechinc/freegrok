@@ -551,8 +551,8 @@ fn bwrap_blocked_placeholder(name: &str, want_dir: bool) -> Option<PathBuf> {
 }
 /// Whether a profile write-denies `/data` via the devbox bwrap bind (built-in
 /// `devbox` or a custom profile that `extends = "devbox"`). This is a pure mount,
-/// so it applies even WITHOUT the `enforce` feature.
-#[cfg(target_os = "linux")]
+/// so it applies even WITHOUT the `enforce` feature. Also used on FreeBSD to
+/// pass `/data` as `--deny-write` to the jail helper.
 pub(crate) fn is_devbox_based(profile: &ProfileName, config: &SandboxConfig) -> bool {
     match profile {
         ProfileName::Devbox => true,
