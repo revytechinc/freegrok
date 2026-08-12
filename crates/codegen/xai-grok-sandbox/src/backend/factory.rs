@@ -66,9 +66,8 @@ impl SandboxBackendFactory {
             "linux" => SandboxBackendKind::NonoLinux,
             "macos" => SandboxBackendKind::NonoMacos,
             "freebsd" => SandboxBackendKind::Jail,
-            // Never treat the family name as a backend — nono is linux|macos only.
-            "unix" | "windows" | "openbsd" | "netbsd" | "dragonfly" | "illumos" | "solaris"
-            | "android" | "ios" | _ => SandboxBackendKind::Noop,
+            // Bare "unix" is a family name, not an OS. Never unlock Landlock/Seatbelt.
+            _ => SandboxBackendKind::Noop,
         }
     }
 
@@ -211,7 +210,7 @@ mod tests {
             SandboxBackendKind::Noop,
         ] {
             assert!(!kind.doctor_detail().is_empty(), "{kind:?}");
-            assert_eq!(kind.as_str().is_empty(), false);
+            assert!(!kind.as_str().is_empty(), "{kind:?}");
         }
         let jail = SandboxBackendKind::Jail;
         assert_eq!(jail.as_str(), "jail");
@@ -226,7 +225,7 @@ mod tests {
             "jail detail must not advertise nono backends: {detail}"
         );
         assert!(
-            detail.contains("not landlock") || detail.contains("not") && detail.contains("landlock"),
+            detail.contains("not landlock") || (detail.contains("not") && detail.contains("landlock")),
             "jail detail should explicitly disclaim Landlock: {detail}"
         );
     }
