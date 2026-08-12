@@ -169,8 +169,9 @@ pub fn jail_reexec_for_profile(
 }
 
 /// Exact deny paths for the helper. Globs are not expanded on FreeBSD
-/// (no landlock walk); they are logged and skipped so we never claim
-/// coverage we do not have.
+/// (Linux-only walk); they are logged and skipped so we never claim
+/// coverage we do not have. Implemented here because `deny::exact_*`
+/// helpers are cfg(linux).
 fn jail_deny_paths(profile: &crate::ProfileName, workspace: &Path) -> (Vec<String>, Vec<String>) {
     let config = crate::profiles::load_sandbox_config(workspace);
     let deny_write = if crate::is_devbox_based(profile, &config) {
@@ -188,14 +189,32 @@ fn jail_deny_paths(profile: &crate::ProfileName, workspace: &Path) -> (Vec<Strin
             return (deny_write, Vec::new());
         }
     };
-    let (exact, globs) = crate::deny::partition_deny_entries(&resolved.deny);
-    if !globs.is_empty() {
+    let mut deny_read = Vec::new();
+    let mut glob_count = 0usize;
+    for entry in &resolved.deny {
+        let s = match entry.to_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        if crate::deny::is_glob(s) {
+            glob_count += 1;
+            continue;
+        }
+        let path = if entry.is_absolute() {
+            entry.clone()
+        } else {
+            workspace.join(entry)
+        };
+        deny_read.push(path.display().to_string());
+    }
+    if glob_count > 0 {
         tracing::warn!(
-            count = globs.len(),
+            count = glob_count,
             "FreeBSD jail helper does not expand deny globs; only exact paths are passed"
         );
     }
-    let deny_read = crate::deny::exact_deny_path_strings(workspace, &exact);
+    deny_read.sort();
+    deny_read.dedup();
     (deny_write, deny_read)
 }
 
