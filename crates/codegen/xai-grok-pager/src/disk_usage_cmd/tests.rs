@@ -13,6 +13,14 @@ fn measured(path: &Path) -> Option<u64> {
     physical_dir_size(path, Volume::of(path)).measure.bytes()
 }
 
+/// ZFS (and similar) compresses a run of identical bytes to one 512-byte
+/// `st_blocks` unit. Physical-size assertions need incompressible payloads.
+fn incompressible(n: usize) -> Vec<u8> {
+    (0..n)
+        .map(|i| (i.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u8)
+        .collect()
+}
+
 fn modified(path: &Path) -> Option<i64> {
     physical_dir_size(path, Volume::of(path))
         .measure
@@ -193,7 +201,7 @@ fn escape_symlink_is_counted_not_sized() {
     std::fs::create_dir_all(home.join("worktrees/xai")).unwrap();
     let external = base.join("external");
     std::fs::create_dir_all(&external).unwrap();
-    std::fs::write(external.join("huge.bin"), vec![b'x'; 65536]).unwrap();
+    std::fs::write(external.join("huge.bin"), incompressible(65536)).unwrap();
     std::os::unix::fs::symlink(&external, home.join("worktrees/xai/escape")).unwrap();
 
     let report = collect_report(&home).unwrap();
@@ -212,7 +220,7 @@ fn top_level_symlink_costs_its_own_inode_not_the_target() {
     let home = base.join("grok-home");
     std::fs::create_dir_all(&home).unwrap();
     let external = base.join("external-huge.bin");
-    std::fs::write(&external, vec![b'x'; 1 << 20]).unwrap();
+    std::fs::write(&external, incompressible(1 << 20)).unwrap();
     let link = home.join("huge.bin");
     std::os::unix::fs::symlink(&external, &link).unwrap();
 
@@ -312,7 +320,7 @@ fn a_row_off_the_anchor_reports_no_size() {
     let tmp = tempfile::TempDir::new().unwrap();
     let wt = tmp.path().join("worktrees/xai/wt-a");
     std::fs::create_dir_all(&wt).unwrap();
-    std::fs::write(wt.join("payload.bin"), vec![b'x'; 65536]).unwrap();
+    std::fs::write(wt.join("payload.bin"), incompressible(65536)).unwrap();
     let elsewhere = Volume::of(&wt).other_device_for_test();
     let mut issues = WalkIssues::default();
 

@@ -858,11 +858,14 @@ mod tests {
     #[tokio::test]
     async fn stop_collects_all_blocks() {
         let registry = registry_from_specs(vec![
-            stop_spec("b1", "echo '{\"decision\":\"block\",\"reason\":\"first\"}'"),
-            stop_spec("allow", "echo ok"),
+            stop_spec(
+                "b1",
+                "printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"first\"}'",
+            ),
+            stop_spec("allow", "printf '%s\\n' ok"),
             stop_spec(
                 "b2",
-                "echo '{\"decision\":\"block\",\"reason\":\"second\"}'",
+                "printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"second\"}'",
             ),
         ]);
         let result =

@@ -19,6 +19,9 @@ export PATH="/usr/local/bin:${PATH}"
 export PROTOC="${PROTOC:-$(command -v protoc || true)}"
 unset CFLAGS || true
 export CARGO_TERM_COLOR=never
+# ACP auth-retry tokio tests overflow the default thread stack (Linux abort /
+# FreeBSD SIGSEGV). 32 MiB is enough for the current_thread mock loop.
+export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
 
 LOG_DIR="${LOG_DIR:-/tmp/grok-freebsd-reg}"
 mkdir -p "$LOG_DIR"

@@ -243,7 +243,20 @@ fn fake_standalone_facts_compose_through_shared_view() {
     );
     let report = collect_report_with(snapshot);
 
-    assert_eq!(report.issue_count(), 1);
+    // `issue_count` also increments when clipboard delivery is unconfirmed
+    // and no clipboard finding exists (hosts without pbcopy, e.g. FreeBSD).
+    let clipboard_unverified = !report.facts.clipboard.delivery.is_confirmed()
+        && !report.findings.iter().any(|finding| {
+            matches!(
+                finding.id,
+                crate::diagnostics::CLIPBOARD_DELIVERY_UNVERIFIED_ID
+                    | crate::diagnostics::CLIPBOARD_DELIVERY_UNAVAILABLE_ID
+            )
+        });
+    assert_eq!(
+        report.issue_count(),
+        1 + usize::from(clipboard_unverified)
+    );
     assert!(
         report
             .findings

@@ -99,7 +99,11 @@ fn a_root_off_the_anchor_is_measured_by_nobody() {
     let root = tmp.path().join("worktrees");
     let worktree = root.join("xai/wt-a");
     std::fs::create_dir_all(&worktree).unwrap();
-    std::fs::write(worktree.join("payload.bin"), vec![b'x'; 65536]).unwrap();
+    // ZFS compresses a run of identical bytes to one 512-byte `st_blocks` unit.
+    let payload: Vec<u8> = (0..65536)
+        .map(|i| (i.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u8)
+        .collect();
+    std::fs::write(worktree.join("payload.bin"), payload).unwrap();
     let elsewhere = Volume::of(tmp.path()).other_device_for_test();
 
     let home = physical_buckets(&root, Volume::of(&root));
