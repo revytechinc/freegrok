@@ -66,7 +66,7 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 | Binary / package | Ports intent: `devel/grok-build` → package `grok-build-native`, bin **`grok-build`**. Leave **misc/grok-build** (Linux brand) alone. FreeBSD ports = **manual submission** (do not auto-push ports trees) |
 | `grok doctor` | Landed. Offline default; **`--ci`** build gate (critical-only, ≤15s). Wired into `scripts/freebsd-regression.sh` + cargo test |
 | `grok jail` | Scaffold: `status` / `catalog` / `setup` (dry-run). Default scope **helper-only** (TUI). `--full` advanced. **No `--apply` yet** |
-| Jail helper | Phase 2: still to implement real create + re-exec |
+| Jail helper | Phase 2: `grok-jail-helper` in `/usr/local/libexec` (not setuid). `--apply` fail-closed without `GROK_JAIL_ROOT`. `GROK_JAIL_HELPER` set-but-missing disables PATH/libexec fallback. Real `jail(8)` create still refused. |
 | Offline crates | Full `CARGO_CRATES` for poudriere still open |
 
 User-facing docs: `crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md` (FreeBSD), `25-doctor.md`.

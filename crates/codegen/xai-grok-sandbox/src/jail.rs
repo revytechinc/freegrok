@@ -62,18 +62,26 @@ pub fn sysctl_jail_jailed() -> Option<bool> {
 
 /// Resolve the jail helper executable, if any.
 ///
-/// Order: `$GROK_JAIL_HELPER` if it points at an existing file, else the first
-/// of [`DEFAULT_HELPER_NAMES`] found on `PATH`.
+/// Order:
+/// 1. `$GROK_JAIL_HELPER` — if **set**, exclusive and fail-closed: an existing
+///    file is used; empty or missing path returns `None` (no PATH / libexec
+///    fallback). A bad override must not silently pick the packaged helper.
+/// 2. First of [`DEFAULT_HELPER_NAMES`] on `PATH`.
+/// 3. Packaged [`LIBEXEC_HELPERS`] (`/usr/local/libexec/...`).
 pub fn resolve_jail_helper() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var(JAIL_HELPER_ENV) {
-        let pb = PathBuf::from(&path);
-        if pb.is_file() {
-            return Some(pb);
+    match std::env::var(JAIL_HELPER_ENV) {
+        Ok(path) => {
+            let pb = PathBuf::from(&path);
+            if pb.is_file() {
+                return Some(pb);
+            }
+            tracing::debug!(
+                path = %path,
+                "{JAIL_HELPER_ENV} set but not a file; not falling back to PATH or libexec"
+            );
+            return None;
         }
-        tracing::debug!(
-            path = %path,
-            "{JAIL_HELPER_ENV} set but not a file; falling back to PATH search"
-        );
+        Err(_) => {}
     }
     for name in DEFAULT_HELPER_NAMES {
         if let Ok(path) = which(name) {
@@ -255,19 +263,38 @@ mod tests {
     #[test]
     fn reexec_returns_none_without_helper() {
         let _g = ENV_LOCK.lock().unwrap();
-        // Ensure we don't accidentally pick up a helper from the environment.
+        // Packaged hosts have /usr/local/libexec/grok-jail-helper. An explicit
+        // GROK_JAIL_HELPER that is not a file must disable discovery (fail-closed)
+        // rather than silently falling back to PATH or libexec.
         let prev_helper = std::env::var_os(JAIL_HELPER_ENV);
         let prev_marker = std::env::var_os(JAIL_ENV_VAR);
-        unsafe {
-            std::env::remove_var(JAIL_HELPER_ENV);
-            std::env::remove_var(JAIL_ENV_VAR);
-        }
-        // Empty PATH so DEFAULT_HELPER_NAMES cannot resolve.
         let prev_path = std::env::var_os("PATH");
+        let dir = std::env::temp_dir().join(format!(
+            "grok-jail-helper-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let decoy = dir.join("grok-jail-helper");
+        std::fs::write(&decoy, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&decoy, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         unsafe {
-            std::env::set_var("PATH", "");
+            std::env::set_var(JAIL_HELPER_ENV, "/no/such/grok-jail-helper");
+            std::env::remove_var(JAIL_ENV_VAR);
+            std::env::set_var("PATH", &dir);
         }
 
+        assert!(
+            resolve_jail_helper().is_none(),
+            "GROK_JAIL_HELPER set to a missing path must not fall back to PATH or libexec"
+        );
         assert!(
             jail_reexec_command(&["/tmp"], &[]).is_none(),
             "without helper, reexec must be None"
@@ -288,6 +315,32 @@ mod tests {
             match prev_path {
                 Some(v) => std::env::set_var("PATH", v),
                 None => std::env::remove_var("PATH"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn helper_env_empty_disables_discovery() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let prev_helper = std::env::var_os(JAIL_HELPER_ENV);
+        let prev_marker = std::env::var_os(JAIL_ENV_VAR);
+        unsafe {
+            std::env::set_var(JAIL_HELPER_ENV, "");
+            std::env::remove_var(JAIL_ENV_VAR);
+        }
+        assert!(
+            resolve_jail_helper().is_none(),
+            "empty GROK_JAIL_HELPER must disable PATH and libexec search"
+        );
+        unsafe {
+            match prev_helper {
+                Some(v) => std::env::set_var(JAIL_HELPER_ENV, v),
+                None => std::env::remove_var(JAIL_HELPER_ENV),
+            }
+            match prev_marker {
+                Some(v) => std::env::set_var(JAIL_ENV_VAR, v),
+                None => std::env::remove_var(JAIL_ENV_VAR),
             }
         }
     }

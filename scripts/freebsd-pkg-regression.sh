@@ -78,6 +78,33 @@ run jail_help grok-build jail --help >/dev/null
 run mcp_list grok-build mcp list >/dev/null
 run doctor_ci_2 grok-build doctor --ci >/dev/null
 
+# Packaged helper: dry-run prints a plan; --apply without GROK_JAIL_ROOT
+# is fail-closed (exit 1 unprivileged, or 3 if somehow root without a root dir).
+HELPER=/usr/local/libexec/grok-jail-helper
+if "$HELPER" --dry-run --deny-write /tmp -- -- /usr/bin/true >/tmp/grok-helper-dry.out 2>&1; then
+	if grep -q "dry-run: not creating a jail" /tmp/grok-helper-dry.out; then
+		ok helper_dry_run
+	else
+		bad helper_dry_run_missing_banner
+	fi
+else
+	bad helper_dry_run
+fi
+set +e
+env -u GROK_JAIL_ROOT "$HELPER" --apply -- -- /usr/bin/true >/tmp/grok-helper-apply.out 2>&1
+apply_ec=$?
+set -e
+case $apply_ec in
+	1|3) ok helper_apply_fail_closed ;;
+	*) bad "helper_apply_fail_closed exit=$apply_ec" ;;
+esac
+if grep -Eq "refusing host path=/|--apply requires root|--apply refused" /tmp/grok-helper-apply.out; then
+	ok helper_apply_message
+else
+	bad helper_apply_message
+fi
+rm -f /tmp/grok-helper-dry.out /tmp/grok-helper-apply.out
+
 echo "PKG_REGRESSION pass=$pass fail=$fail host=$(uname -srm)"
 if [ "$fail" -ne 0 ]; then
 	exit 1
