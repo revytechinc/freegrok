@@ -318,7 +318,7 @@ fn check_grok_home() -> CheckResult {
             duration_ms: 0,
         };
     };
-    let grok = home.join(".grok");
+    let grok = xai_grok_config::grok_home();
     match std::fs::create_dir_all(&grok) {
         Ok(()) => {
             let probe = grok.join(".doctor-write-probe");
@@ -330,7 +330,7 @@ fn check_grok_home() -> CheckResult {
                         tier: "default".into(),
                         severity: Severity::Critical,
                         status: Status::Pass,
-                        summary: "~/.grok is writable".into(),
+                        summary: "config home is writable".into(),
                         detail: Some(grok.display().to_string()),
                         fix: None,
                         requires: vec![],
@@ -342,9 +342,9 @@ fn check_grok_home() -> CheckResult {
                     tier: "default".into(),
                     severity: Severity::Critical,
                     status: Status::Fail,
-                    summary: "~/.grok is not writable".into(),
+                    summary: "config home is not writable".into(),
                     detail: Some(format!("{}: {e}", grok.display())),
-                    fix: Some("Fix permissions on ~/.grok".into()),
+                    fix: Some("Fix permissions on ~/.freegrok (or $FREEGROK_HOME / $GROK_HOME)".into()),
                     requires: vec![],
                     duration_ms: 0,
                 },
@@ -355,9 +355,9 @@ fn check_grok_home() -> CheckResult {
             tier: "default".into(),
             severity: Severity::Critical,
             status: Status::Fail,
-            summary: "Cannot create ~/.grok".into(),
+            summary: "Cannot create config home".into(),
             detail: Some(e.to_string()),
-            fix: Some("Ensure HOME is set and the parent directory is writable".into()),
+            fix: Some("Ensure HOME is set and ~/.freegrok (or $FREEGROK_HOME) is writable".into()),
             requires: vec![],
             duration_ms: 0,
         },

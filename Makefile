@@ -128,6 +128,14 @@ _install_bin: require-build
 	# Full second copy (not a symlink) so pkill by name cannot take down the
 	# session-safe twin — same reason grok-build-static existed.
 	install -m 755 "$(RELEASE_BIN)" "$(DESTDIR)$(BINDIR)/$(BINNAME)-static"
+	# Jail helper (not setuid). Packaged under libexec.
+	@if [ -x target/release/grok-jail-helper ]; then \
+		mkdir -p "$(DESTDIR)$(IPREFIX)/libexec"; \
+		install -m 755 target/release/grok-jail-helper \
+			"$(DESTDIR)$(IPREFIX)/libexec/grok-jail-helper"; \
+		ln -sfn grok-jail-helper \
+			"$(DESTDIR)$(IPREFIX)/libexec/freegrok-jail-helper"; \
+	fi
 	# Short alias + one-release compat names.
 	ln -sfn "$(BINNAME)" "$(DESTDIR)$(BINDIR)/fg"
 	ln -sfn "$(BINNAME)" "$(DESTDIR)$(BINDIR)/grok"
