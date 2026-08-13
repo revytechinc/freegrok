@@ -411,9 +411,9 @@ pub struct LeaderArgs {
 }
 #[derive(Debug, Clone, Parser)]
 #[command(
-    name = "grok",
+    name = "freegrok",
     version = env!("VERSION_WITH_COMMIT"),
-    about = "Grok Build TUI",
+    about = "FreeGrok",
     disable_version_flag = true,
     next_display_order = None,
     help_template = "\

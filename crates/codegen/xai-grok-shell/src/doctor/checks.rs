@@ -209,7 +209,7 @@ fn check_binary_identity() -> CheckResult {
                     "path={exe} brand={brand}. This is likely the linuxulator image, not the native FreeBSD build."
                 )),
                 fix: Some(
-                    "Install the native package (devel/grok-build → bin/grok-build) or build from source on FreeBSD."
+                    "Install the native package (devel/freegrok → bin/freegrok) or build from source on FreeBSD."
                         .into(),
                 ),
                 requires: vec![],
@@ -560,10 +560,7 @@ pub fn sandbox_deep_check() -> CheckResult {
             severity: Severity::Warn,
             status: Status::Warn,
             summary: "Jail helper present; deep deny probe not implemented yet".into(),
-            detail: Some(format!(
-                "helper={}",
-                status.helper.unwrap().display()
-            )),
+            detail: Some(format!("helper={}", status.helper.unwrap().display())),
             fix: Some("Await Phase 2 helper --dry-run protocol".into()),
             requires: vec!["helper".into()],
             duration_ms: 0,
@@ -578,7 +575,9 @@ pub fn sandbox_deep_check() -> CheckResult {
             severity: Severity::Info,
             status: Status::Skip,
             summary: "Sandbox-deep FreeBSD jail path N/A".into(),
-            detail: Some("On Linux/macOS use existing sandbox profiles / nono support_info.".into()),
+            detail: Some(
+                "On Linux/macOS use existing sandbox profiles / nono support_info.".into(),
+            ),
             fix: None,
             requires: vec![],
             duration_ms: 0,
@@ -759,10 +758,10 @@ fn check_update_channel_note() -> CheckResult {
             status: Status::Info,
             summary: "FreeBSD has no official native auto-update channel yet".into(),
             detail: Some(
-                "Official downloads are linux-x86_64 (linuxulator). Prefer ports/pkg grok-build-native (bin/grok-build)."
+                "Official downloads are linux-x86_64 (linuxulator). Prefer ports/pkg freegrok (bin/freegrok)."
                     .into(),
             ),
-            fix: Some("Update via FreeBSD ports/pkg when available; leave Linux ~/.grok install alone.".into()),
+            fix: Some("Update via FreeBSD ports/pkg when available; leave Linux ~/.freegrok / ~/.grok install alone.".into()),
             requires: vec![],
             duration_ms: 0,
         }

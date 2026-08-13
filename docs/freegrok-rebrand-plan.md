@@ -1,6 +1,8 @@
 # FreeGrok rebrand plan
 
-**Status:** planning (not started)  
+**Status:** Phase A in progress (2026-08-13) — binary `freegrok`, home copy
+`~/.grok` → `~/.freegrok`, origin `revytechinc/freegrok`. Crate dirs stay
+`xai-grok-*`.  
 **Audience:** CloudBSD / RevyTech maintainers  
 **Out of scope for this plan:** pushing anything to xAI upstream  
 
@@ -330,3 +332,4 @@ Not in first PR: full `~/.freegrok` migration, ports rename, crate directory ren
 | Date | Note |
 |------|------|
 | 2026-08-11 | Plan authored after FreeBSD ports `grok-build-0.2.106_5` + revytech `88f8d5d` baseline. Implementation not started. |
+| 2026-08-13 | Phase A started: cargo bin `freegrok`, clap/about FreeGrok, Makefile BINNAME, README clone `revytechinc/freegrok`, origin set. Config copy `~/.grok` → `~/.freegrok` (skip caches). Dual-read `FREEGROK_*`/`GROK_*`. Project `.grok/` copied to `.freegrok/`. Compat install names `fg`/`grok`/`grok-build`. Crate dirs still `xai-grok-*`. |

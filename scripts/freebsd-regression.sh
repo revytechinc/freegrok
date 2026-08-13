@@ -1,11 +1,11 @@
 #!/bin/sh
-# FreeBSD full-ish regression + probe harness for grok-build.
+# FreeBSD full-ish regression + probe harness for FreeGrok.
 # Run on FreeBSD (e.g. freedev007) from the repo root:
 #   ./scripts/freebsd-regression.sh
 # Optional: PACKAGES="xai-grok-sandbox xai-grok-tools" ./scripts/freebsd-regression.sh
 #
 # After a successful release build, runs:
-#   target/release/xai-grok-pager doctor --ci
+#   target/release/freegrok doctor --ci
 # (offline product gate; see docs/user-guide/25-doctor.md)
 #
 # For regression against a *make install* binary (recommended):
@@ -48,10 +48,10 @@ echo "git: $(git rev-parse --short HEAD 2>/dev/null) $(git branch --show-current
   uname -a
   sysctl security.jail.jailed 2>/dev/null || true
   sysctl security.jail.enable 2>/dev/null || true
-  if [ -x target/release/xai-grok-pager ]; then
-    BIN=target/release/xai-grok-pager
-  elif [ -x target/debug/xai-grok-pager ]; then
-    BIN=target/debug/xai-grok-pager
+  if [ -x target/release/freegrok ]; then
+    BIN=target/release/freegrok
+  elif [ -x target/debug/freegrok ]; then
+    BIN=target/debug/freegrok
   else
     BIN=
   fi
@@ -137,7 +137,7 @@ done
 echo "==== RELEASE pager-bin $(ts) ====" | tee -a "$LOG"
 if cargo build -p xai-grok-pager-bin --release >>"$LOG" 2>&1; then
   echo "PASS release xai-grok-pager-bin" | tee -a "$SUMMARY"
-  target/release/xai-grok-pager --version | tee -a "$SUMMARY" || true
+  target/release/freegrok --version | tee -a "$SUMMARY" || true
 else
   echo "FAIL release xai-grok-pager-bin" | tee -a "$SUMMARY"
   fail=$((fail + 1))
@@ -146,8 +146,8 @@ fi
 
 # Product doctor CI gate (offline, critical-only, 15s wall budget — no stall)
 echo "==== DOCTOR --ci $(ts) ====" | tee -a "$LOG"
-if [ -x target/release/xai-grok-pager ]; then
-  if target/release/xai-grok-pager doctor --ci --json >>"$LOG" 2>&1; then
+if [ -x target/release/freegrok ]; then
+  if target/release/freegrok doctor --ci --json >>"$LOG" 2>&1; then
     echo "PASS doctor --ci" | tee -a "$SUMMARY"
     pass=$((pass + 1))
   else

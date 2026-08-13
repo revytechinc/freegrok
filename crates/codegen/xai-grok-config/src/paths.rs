@@ -1,9 +1,201 @@
-//! Filesystem locations for grok config files and binaries.
+//! Filesystem locations for grok / FreeGrok config files and binaries.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 static GROK_HOME: OnceLock<PathBuf> = OnceLock::new();
+
+/// Directory names under a legacy `~/.grok` tree that must not be copied into
+/// `~/.freegrok` (regenerable caches, hostile sandbox fixtures, or huge blobs).
+const MIGRATE_SKIP_DIR_NAMES: &[&str] = &[
+    "downloads",
+    "marketplace-cache",
+    "memtrace",
+    "logs",
+    "vendor",
+];
+
+/// Marker written into a copied FreeGrok home so we can tell a tree was
+/// migrated from grok-build rather than created empty.
+pub const MIGRATED_FROM_GROK_MARKER: &str = ".migrated-from-grok";
+
+/// Look up `FREEGROK_{suffix}` then `GROK_{suffix}`. Empty values are ignored.
+pub fn env_var(suffix: &str) -> Option<String> {
+    nonempty_env(&format!("FREEGROK_{suffix}")).or_else(|| nonempty_env(&format!("GROK_{suffix}")))
+}
+
+/// Look up `FREEGROK_{suffix}` then `GROK_{suffix}` as `OsString`.
+pub fn env_var_os(suffix: &str) -> Option<OsString> {
+    std::env::var_os(format!("FREEGROK_{suffix}"))
+        .or_else(|| std::env::var_os(format!("GROK_{suffix}")))
+}
+
+fn nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().and_then(|v| {
+        let t = v.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    })
+}
+
+fn should_skip_migrate_name(name: &str) -> bool {
+    MIGRATE_SKIP_DIR_NAMES.contains(&name) || name.starts_with("sandbox-blocked")
+}
+
+fn staging_path(dest: &Path) -> PathBuf {
+    let mut s = dest.as_os_str().to_os_string();
+    s.push(".migrating");
+    PathBuf::from(s)
+}
+
+/// Recursively copy `src` → `dest` for a grok-build → FreeGrok tree migrate.
+///
+/// Returns `Ok(true)` when a copy was performed, `Ok(false)` when dest already
+/// exists or src is missing. Skips cache/hostile directory names.
+pub fn copy_grok_tree(src: &Path, dest: &Path) -> std::io::Result<bool> {
+    if dest.exists() {
+        return Ok(false);
+    }
+    if !src.exists() {
+        return Ok(false);
+    }
+    let staging = staging_path(dest);
+    if staging.exists() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    copy_tree_filtered(src, &staging)?;
+    std::fs::write(
+        staging.join(MIGRATED_FROM_GROK_MARKER),
+        format!("source={}\n", src.display()),
+    )?;
+    match std::fs::rename(&staging, dest) {
+        Ok(()) => Ok(true),
+        Err(e) => {
+            if dest.exists() {
+                let _ = std::fs::remove_dir_all(&staging);
+                Ok(false)
+            } else {
+                let _ = std::fs::remove_dir_all(&staging);
+                Err(e)
+            }
+        }
+    }
+}
+
+fn copy_tree_filtered(src: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if should_skip_migrate_name(&name_str) {
+            continue;
+        }
+        let from = entry.path();
+        let to = dest.join(&name);
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            copy_tree_filtered(&from, &to)?;
+        } else if ft.is_symlink() {
+            #[cfg(unix)]
+            {
+                let target = std::fs::read_link(&from)?;
+                let _ = std::os::unix::fs::symlink(target, &to);
+            }
+            #[cfg(not(unix))]
+            {
+                if from.is_dir() {
+                    copy_tree_filtered(&from, &to)?;
+                } else {
+                    std::fs::copy(&from, &to)?;
+                }
+            }
+        } else {
+            std::fs::copy(&from, &to)?;
+            #[cfg(unix)]
+            {
+                if let Ok(meta) = std::fs::metadata(&from) {
+                    let _ = std::fs::set_permissions(&to, meta.permissions());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Result of resolving the per-user config home (testable; no process env).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HomeResolution {
+    pub path: PathBuf,
+    pub copied_from: Option<PathBuf>,
+}
+
+/// Resolve the user config home from explicit env + default paths.
+///
+/// Precedence:
+/// 1. `freegrok_home` (`FREEGROK_HOME`)
+/// 2. `grok_home` (`GROK_HOME`)
+/// 3. `default_fg` (`~/.freegrok`) after optionally copying `default_legacy`
+///    (`~/.grok`) into it when dest is missing
+pub fn resolve_user_home(
+    freegrok_home: Option<&str>,
+    grok_home: Option<&str>,
+    default_fg: &Path,
+    default_legacy: &Path,
+    migrate: bool,
+) -> HomeResolution {
+    if let Some(v) = freegrok_home.map(str::trim).filter(|s| !s.is_empty()) {
+        return HomeResolution {
+            path: PathBuf::from(v),
+            copied_from: None,
+        };
+    }
+    if let Some(v) = grok_home.map(str::trim).filter(|s| !s.is_empty()) {
+        return HomeResolution {
+            path: PathBuf::from(v),
+            copied_from: None,
+        };
+    }
+    let mut copied_from = None;
+    if migrate && !default_fg.exists() && default_legacy.exists() {
+        if copy_grok_tree(default_legacy, default_fg).ok() == Some(true) {
+            copied_from = Some(default_legacy.to_path_buf());
+        }
+    }
+    HomeResolution {
+        path: default_fg.to_path_buf(),
+        copied_from,
+    }
+}
+
+/// Project config directory: copy `.grok` → `.freegrok` when dest is missing,
+/// then prefer `.freegrok`.
+pub fn project_config_dir(root: &Path) -> PathBuf {
+    let fg = root.join(".freegrok");
+    let legacy = root.join(".grok");
+    if !fg.exists() && legacy.exists() {
+        let _ = copy_grok_tree(&legacy, &fg);
+    }
+    if fg.exists() { fg } else { legacy }
+}
+
+/// System config dir under an injectable `/etc` root.
+/// Prefer `freegrok` when it exists, else `grok` when it exists, else `freegrok`.
+pub fn system_config_dir_in(etc: &Path) -> PathBuf {
+    let fg = etc.join("freegrok");
+    let legacy = etc.join("grok");
+    if fg.exists() {
+        fg
+    } else if legacy.exists() {
+        legacy
+    } else {
+        fg
+    }
+}
 
 #[cfg(target_os = "macos")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str =
@@ -11,9 +203,14 @@ const CLAUDE_MANAGED_SETTINGS_PATH: &str =
 #[cfg(target_os = "linux")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str = "/etc/claude-code/managed-settings.json";
 
-/// The default user grok directory (`~/.grok`, canonicalized) used when
-/// `GROK_HOME` is unset. Exposed so callers (e.g. display helpers) can detect
-/// whether [`grok_home()`] is the default without duplicating the computation.
+fn user_home_dir() -> PathBuf {
+    #[allow(deprecated)]
+    let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    dunce::canonicalize(&home).unwrap_or(home)
+}
+
+/// The default *legacy* grok-build directory (`~/.grok`). Used as the copy
+/// source when migrating into [`default_freegrok_home`].
 ///
 /// Uses [`dunce::canonicalize`] instead of [`std::fs::canonicalize`]: on
 /// Windows, std returns a verbatim path (`\\?\C:\Users\...`) which external
@@ -26,52 +223,75 @@ const CLAUDE_MANAGED_SETTINGS_PATH: &str = "/etc/claude-code/managed-settings.js
 /// Keep the dunce canonicalization in sync with the hand-rolled duplicate in
 /// `xai_fast_worktree::db::resolve_grok_home` (deliberately standalone crate).
 pub fn default_grok_home() -> PathBuf {
-    #[allow(deprecated)]
-    let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    dunce::canonicalize(&home).unwrap_or(home).join(".grok")
+    user_home_dir().join(".grok")
 }
 
-/// Per-user config directory: `$GROK_HOME` or `~/.grok`. Created if needed.
+/// The default FreeGrok user directory (`~/.freegrok`, canonicalized).
+pub fn default_freegrok_home() -> PathBuf {
+    user_home_dir().join(".freegrok")
+}
+
+/// Per-user config directory.
+///
+/// Order: `$FREEGROK_HOME` → `$GROK_HOME` → `~/.freegrok` (copying `~/.grok`
+/// into it when dest is missing). Created if needed.
 pub fn grok_home() -> PathBuf {
     GROK_HOME
         .get_or_init(|| {
-            let grok_home = if let Ok(v) = std::env::var("GROK_HOME") {
-                PathBuf::from(v)
-            } else {
-                default_grok_home()
-            };
-            let _ = std::fs::create_dir_all(&grok_home);
-            grok_home
+            let migrate = std::env::var_os("FREEGROK_NO_MIGRATE").is_none();
+            let resolved = resolve_user_home(
+                nonempty_env("FREEGROK_HOME").as_deref(),
+                nonempty_env("GROK_HOME").as_deref(),
+                &default_freegrok_home(),
+                &default_grok_home(),
+                migrate,
+            );
+            if let Some(src) = &resolved.copied_from {
+                eprintln!(
+                    "freegrok: copied grok-build config from {} → {}",
+                    src.display(),
+                    resolved.path.display()
+                );
+            }
+            let _ = std::fs::create_dir_all(&resolved.path);
+            resolved.path
         })
         .clone()
 }
 
 /// The user-global grok home, but only when one genuinely resolves: `Some` when
-/// `$GROK_HOME` is set or a home directory is found, `None` otherwise. Unlike
-/// [`grok_home()`], this never falls back to a cwd-relative `.grok`, so callers
-/// that *scan* user-global grok resources (hooks, marketplace sources, ...) don't
-/// mistake a project's `.grok` tree for the user-global one when no home resolves.
+/// `$FREEGROK_HOME`/`$GROK_HOME` is set or a home directory is found, `None`
+/// otherwise. Unlike [`grok_home()`], this never falls back to a cwd-relative
+/// `.grok`, so callers that *scan* user-global grok resources (hooks,
+/// marketplace sources, ...) don't mistake a project's `.grok` tree for the
+/// user-global one when no home resolves.
 pub fn user_grok_home() -> Option<PathBuf> {
     #[allow(deprecated)]
-    let resolvable = std::env::var_os("GROK_HOME").is_some() || std::env::home_dir().is_some();
+    let resolvable = env_var_os("HOME").is_some() || std::env::home_dir().is_some();
     resolvable.then(grok_home)
 }
 
-/// Canonical grok application path: `$GROK_HOME/bin/grok` (Unix) or `grok.exe` (Windows).
+/// Canonical application path: `$FREEGROK_HOME/bin/freegrok` (Unix) or
+/// `freegrok.exe` (Windows).
 pub fn grok_application() -> PathBuf {
     grok_application_in(&grok_home())
 }
 
 /// [`grok_application`] under an explicit home instead of `$GROK_HOME`.
 pub fn grok_application_in(home: &std::path::Path) -> PathBuf {
-    let name = if cfg!(windows) { "grok.exe" } else { "grok" };
+    let name = if cfg!(windows) {
+        "freegrok.exe"
+    } else {
+        "freegrok"
+    };
     home.join("bin").join(name)
 }
 
-/// System-wide config directory: `/etc/grok/` on Unix, `None` on Windows.
+/// System-wide config directory: `/etc/freegrok` if present, else `/etc/grok`
+/// if present, else `/etc/freegrok`. `None` on Windows.
 pub fn system_config_dir() -> Option<PathBuf> {
     if cfg!(unix) {
-        Some(PathBuf::from("/etc/grok"))
+        Some(system_config_dir_in(Path::new("/etc")))
     } else {
         None
     }
@@ -263,6 +483,7 @@ fn slugify(input: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::TempDir;
 
     /// Realistic CWDs that trigger the bug (URL-encoded > 255 bytes).
@@ -367,6 +588,257 @@ mod tests {
         let home = default_grok_home();
         assert!(!home.to_string_lossy().starts_with(r"\\?\"));
         assert!(home.ends_with(".grok"));
+    }
+
+    #[test]
+    fn default_freegrok_home_has_no_verbatim_prefix() {
+        let home = default_freegrok_home();
+        assert!(!home.to_string_lossy().starts_with(r"\\?\"));
+        assert!(home.ends_with(".freegrok"));
+    }
+
+    fn write_file(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, body).unwrap();
+    }
+
+    fn seed_legacy_tree(root: &Path) {
+        write_file(&root.join("config.toml"), "model = \"legacy\"\n");
+        write_file(&root.join("auth.json"), "{\"token\":\"abc\"}\n");
+        write_file(&root.join("skills/ultrawork/SKILL.md"), "# ulw\n");
+        write_file(&root.join("rules/keep.md"), "keep going\n");
+        write_file(&root.join("downloads/big.bin"), "BLOB");
+        write_file(&root.join("marketplace-cache/x.idx"), "idx");
+        write_file(&root.join("sandbox-blocked-dir.1/x"), "nope");
+    }
+
+    #[test]
+    fn copy_grok_tree_copies_config_and_skills_skips_caches() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("legacy");
+        let dest = tmp.path().join("freegrok");
+        seed_legacy_tree(&src);
+
+        assert!(copy_grok_tree(&src, &dest).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("config.toml")).unwrap(),
+            "model = \"legacy\"\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("skills/ultrawork/SKILL.md")).unwrap(),
+            "# ulw\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("auth.json")).unwrap(),
+            "{\"token\":\"abc\"}\n"
+        );
+        assert!(dest.join(MIGRATED_FROM_GROK_MARKER).is_file());
+        assert!(!dest.join("downloads").exists(), "must not copy downloads");
+        assert!(
+            !dest.join("marketplace-cache").exists(),
+            "must not copy marketplace-cache"
+        );
+        assert!(
+            !dest.join("sandbox-blocked-dir.1").exists(),
+            "must not copy sandbox-blocked-dir.*"
+        );
+    }
+
+    #[test]
+    fn copy_grok_tree_is_noop_when_dest_exists() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("legacy");
+        let dest = tmp.path().join("freegrok");
+        seed_legacy_tree(&src);
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("config.toml"), "keep\n").unwrap();
+        assert!(!copy_grok_tree(&src, &dest).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("config.toml")).unwrap(),
+            "keep\n"
+        );
+    }
+
+    #[test]
+    fn copy_grok_tree_is_noop_when_src_missing() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("nope");
+        let dest = tmp.path().join("freegrok");
+        assert!(!copy_grok_tree(&src, &dest).unwrap());
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn resolve_prefers_freegrok_home_env() {
+        let tmp = TempDir::new().unwrap();
+        let fg = tmp.path().join("from-fg");
+        let r = resolve_user_home(
+            Some(fg.to_str().unwrap()),
+            Some("/tmp/legacy-should-not-win"),
+            &tmp.path().join("default-fg"),
+            &tmp.path().join("default-legacy"),
+            true,
+        );
+        assert_eq!(r.path, fg);
+        assert_eq!(r.copied_from, None);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_grok_home_env() {
+        let tmp = TempDir::new().unwrap();
+        let gh = tmp.path().join("from-gh");
+        let r = resolve_user_home(
+            Some("  "),
+            Some(gh.to_str().unwrap()),
+            &tmp.path().join("default-fg"),
+            &tmp.path().join("default-legacy"),
+            true,
+        );
+        assert_eq!(r.path, gh);
+        assert_eq!(r.copied_from, None);
+    }
+
+    #[test]
+    fn resolve_copies_legacy_tree_into_default_freegrok() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join("home").join(".freegrok");
+        let src = tmp.path().join("home").join(".grok");
+        seed_legacy_tree(&src);
+        let r = resolve_user_home(None, None, &dest, &src, true);
+        assert_eq!(r.path, dest);
+        assert_eq!(r.copied_from.as_deref(), Some(src.as_path()));
+        assert_eq!(
+            std::fs::read_to_string(dest.join("config.toml")).unwrap(),
+            "model = \"legacy\"\n"
+        );
+        assert!(!dest.join("downloads").exists());
+    }
+
+    #[test]
+    fn resolve_does_not_overwrite_existing_freegrok() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join(".freegrok");
+        let src = tmp.path().join(".grok");
+        seed_legacy_tree(&src);
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("config.toml"), "already\n").unwrap();
+        let r = resolve_user_home(None, None, &dest, &src, true);
+        assert_eq!(r.copied_from, None);
+        assert_eq!(
+            std::fs::read_to_string(dest.join("config.toml")).unwrap(),
+            "already\n"
+        );
+    }
+
+    #[test]
+    fn resolve_skips_copy_when_migrate_false() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join(".freegrok");
+        let src = tmp.path().join(".grok");
+        seed_legacy_tree(&src);
+        let r = resolve_user_home(None, None, &dest, &src, false);
+        assert_eq!(r.path, dest);
+        assert_eq!(r.copied_from, None);
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn project_config_dir_copies_dot_grok_to_dot_freegrok() {
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp.path().join(".grok/config.toml"), "from-project\n");
+        let dir = project_config_dir(tmp.path());
+        assert_eq!(dir, tmp.path().join(".freegrok"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("config.toml")).unwrap(),
+            "from-project\n"
+        );
+        // legacy tree is kept
+        assert!(tmp.path().join(".grok/config.toml").is_file());
+    }
+
+    #[test]
+    fn project_config_dir_prefers_existing_freegrok() {
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp.path().join(".grok/config.toml"), "old\n");
+        write_file(&tmp.path().join(".freegrok/config.toml"), "new\n");
+        let dir = project_config_dir(tmp.path());
+        assert_eq!(dir, tmp.path().join(".freegrok"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("config.toml")).unwrap(),
+            "new\n"
+        );
+    }
+
+    #[test]
+    fn system_config_dir_in_prefers_freegrok_when_present() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("freegrok")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("grok")).unwrap();
+        assert_eq!(
+            system_config_dir_in(tmp.path()),
+            tmp.path().join("freegrok")
+        );
+    }
+
+    #[test]
+    fn system_config_dir_in_falls_back_to_grok() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("grok")).unwrap();
+        assert_eq!(system_config_dir_in(tmp.path()), tmp.path().join("grok"));
+    }
+
+    #[test]
+    fn system_config_dir_in_defaults_to_freegrok_when_neither_exists() {
+        let tmp = TempDir::new().unwrap();
+        assert_eq!(
+            system_config_dir_in(tmp.path()),
+            tmp.path().join("freegrok")
+        );
+    }
+
+    #[test]
+    fn env_var_prefers_freegrok_prefix() {
+        const SUFFIX: &str = "CFGCOPY_DUALREAD_TEST";
+        let fg = format!("FREEGROK_{SUFFIX}");
+        let gk = format!("GROK_{SUFFIX}");
+        // SAFETY: test-only env keys, unique suffix, restored before return.
+        unsafe {
+            std::env::set_var(&fg, "from-freegrok");
+            std::env::set_var(&gk, "from-grok");
+        }
+        let got = env_var(SUFFIX);
+        unsafe {
+            std::env::remove_var(&fg);
+            std::env::remove_var(&gk);
+        }
+        assert_eq!(got.as_deref(), Some("from-freegrok"));
+    }
+
+    #[test]
+    fn env_var_falls_back_to_grok_prefix() {
+        const SUFFIX: &str = "CFGCOPY_FALLBACK_TEST";
+        let gk = format!("GROK_{SUFFIX}");
+        unsafe {
+            std::env::remove_var(format!("FREEGROK_{SUFFIX}"));
+            std::env::set_var(&gk, "legacy-only");
+        }
+        let got = env_var(SUFFIX);
+        unsafe {
+            std::env::remove_var(&gk);
+        }
+        assert_eq!(got.as_deref(), Some("legacy-only"));
+    }
+
+    #[test]
+    fn grok_application_in_uses_freegrok_bin_name() {
+        let p = grok_application_in(Path::new("/tmp/h"));
+        assert!(p.ends_with(if cfg!(windows) {
+            "bin/freegrok.exe"
+        } else {
+            "bin/freegrok"
+        }));
     }
 
     #[cfg(unix)]

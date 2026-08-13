@@ -1,4 +1,4 @@
-# Grok Build — source install (no ports required)
+# FreeGrok — source install (no ports required)
 #
 # Defaults:
 #   make            → build release binary (same as make build / make release)
@@ -17,11 +17,11 @@
 
 PREFIX ?= /usr/local
 DESTDIR ?=
-BINNAME ?= grok-build
+BINNAME ?= freegrok
 
 CARGO ?= cargo
 CARGO_BIN_PKG = xai-grok-pager-bin
-CARGO_BIN_NAME = xai-grok-pager
+CARGO_BIN_NAME = freegrok
 RELEASE_BIN = target/release/$(CARGO_BIN_NAME)
 PROTOC ?= protoc
 
@@ -29,7 +29,7 @@ PROTOC ?= protoc
 IPREFIX = $(PREFIX)
 
 BINDIR = $(IPREFIX)/bin
-DOCDIR = $(IPREFIX)/share/doc/grok-build
+DOCDIR = $(IPREFIX)/share/doc/freegrok
 BASHCOMPDIR = $(IPREFIX)/etc/bash_completion.d
 ZSHCOMPDIR = $(IPREFIX)/share/zsh/site-functions
 FISHCOMPDIR = $(IPREFIX)/share/fish/vendor_completions.d
@@ -41,7 +41,7 @@ FISHCOMPDIR = $(IPREFIX)/share/fish/vendor_completions.d
 all: build
 
 help:
-	@echo "Grok Build source Makefile (TUI agent)"
+	@echo "FreeGrok source Makefile (TUI agent)"
 	@echo ""
 	@echo "  make            release binary (default; same as make build)"
 	@echo "  make build      release binary (cargo, incremental)"
@@ -104,8 +104,8 @@ install: ensure-build require-build
 		echo "==> staged install DESTDIR=$$dest PREFIX=$$pref"; \
 		$(MAKE) _install_all IPREFIX="$$pref" DESTDIR="$$dest" BINNAME="$(BINNAME)"; \
 	elif mkdir -p "$$pref/bin" 2>/dev/null \
-		&& touch "$$pref/bin/.grok-write-test" 2>/dev/null; then \
-		rm -f "$$pref/bin/.grok-write-test"; \
+		&& touch "$$pref/bin/.freegrok-write-test" 2>/dev/null; then \
+		rm -f "$$pref/bin/.freegrok-write-test"; \
 		echo "==> install PREFIX=$$pref"; \
 		$(MAKE) _install_all IPREFIX="$$pref" DESTDIR="" BINNAME="$(BINNAME)"; \
 	else \
@@ -125,14 +125,21 @@ _install_all: require-build _install_bin _install_completions _install_docs
 _install_bin: require-build
 	mkdir -p "$(DESTDIR)$(BINDIR)"
 	install -m 755 "$(RELEASE_BIN)" "$(DESTDIR)$(BINDIR)/$(BINNAME)"
+	# Full second copy (not a symlink) so pkill by name cannot take down the
+	# session-safe twin — same reason grok-build-static existed.
+	install -m 755 "$(RELEASE_BIN)" "$(DESTDIR)$(BINDIR)/$(BINNAME)-static"
+	# Short alias + one-release compat names.
+	ln -sfn "$(BINNAME)" "$(DESTDIR)$(BINDIR)/fg"
+	ln -sfn "$(BINNAME)" "$(DESTDIR)$(BINDIR)/grok"
+	ln -sfn "$(BINNAME)" "$(DESTDIR)$(BINDIR)/grok-build"
 
 _install_completions: require-build
 	mkdir -p "$(DESTDIR)$(BASHCOMPDIR)" "$(DESTDIR)$(ZSHCOMPDIR)" "$(DESTDIR)$(FISHCOMPDIR)"
-	./$(RELEASE_BIN) completions bash | sed "s/grok/$(BINNAME)/g" \
+	./$(RELEASE_BIN) completions bash | sed "s/freegrok/$(BINNAME)/g" \
 		> "$(DESTDIR)$(BASHCOMPDIR)/$(BINNAME)"
-	./$(RELEASE_BIN) completions zsh | sed "s/grok/$(BINNAME)/g" \
+	./$(RELEASE_BIN) completions zsh | sed "s/freegrok/$(BINNAME)/g" \
 		> "$(DESTDIR)$(ZSHCOMPDIR)/_$(BINNAME)"
-	./$(RELEASE_BIN) completions fish | sed "s/grok/$(BINNAME)/g" \
+	./$(RELEASE_BIN) completions fish | sed "s/freegrok/$(BINNAME)/g" \
 		> "$(DESTDIR)$(FISHCOMPDIR)/$(BINNAME).fish"
 	chmod 644 \
 		"$(DESTDIR)$(BASHCOMPDIR)/$(BINNAME)" \
@@ -155,9 +162,14 @@ _install_docs:
 #   make uninstall PREFIX=$$HOME/.local
 uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/bin/$(BINNAME)"
+	rm -f "$(DESTDIR)$(PREFIX)/bin/$(BINNAME)-static"
+	rm -f "$(DESTDIR)$(PREFIX)/bin/fg"
+	rm -f "$(DESTDIR)$(PREFIX)/bin/grok"
+	rm -f "$(DESTDIR)$(PREFIX)/bin/grok-build"
 	rm -f "$(DESTDIR)$(PREFIX)/etc/bash_completion.d/$(BINNAME)"
 	rm -f "$(DESTDIR)$(PREFIX)/share/zsh/site-functions/_$(BINNAME)"
 	rm -f "$(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/$(BINNAME).fish"
+	rm -rf "$(DESTDIR)$(PREFIX)/share/doc/freegrok"
 	rm -rf "$(DESTDIR)$(PREFIX)/share/doc/grok-build"
 
 clean:

@@ -1,9 +1,9 @@
 #!/bin/sh
 # Product-truth regression: installed *package* path, not cargo target/.
 #
-#   ./scripts/freebsd-pkg-regression.sh [path/to/grok-build-*.pkg]
+#   ./scripts/freebsd-pkg-regression.sh [path/to/freegrok-*.pkg]
 #
-# Requires FreeBSD with pkg and an installed grok-build package (or a .pkg
+# Requires FreeBSD with pkg and an installed freegrok package (or a .pkg
 # argument that can be installed with doas/sudo/pkg -U).
 #
 # Exit 0 only when every check PASSes. Real assertions only — no smoke fluff.
@@ -53,16 +53,18 @@ export PATH="/usr/local/bin:${PATH}"
 DOC=$(mktemp -t grok-pkg-doc.XXXXXX)
 trap 'rm -f "$DOC"' EXIT
 
-run pkg_info pkg info -e grok-build
-run pkg_which sh -c 'pkg which /usr/local/bin/grok-build | grep -q grok-build'
-run bin_exists test -x /usr/local/bin/grok-build
-run static_exists test -x /usr/local/bin/grok-build-static
-run alias_exists test -e /usr/local/bin/grok
-run helper_libexec test -x /usr/local/libexec/grok-jail-helper
-run elf sh -c 'file /usr/local/bin/grok-build | grep -qi FreeBSD'
-run version sh -c 'grok-build --version >/dev/null'
+run pkg_info sh -c 'pkg info -e freegrok || pkg info -e grok-build'
+run pkg_which sh -c 'pkg which /usr/local/bin/freegrok | grep -Eq "freegrok|grok-build"'
+run bin_exists test -x /usr/local/bin/freegrok
+run static_exists test -x /usr/local/bin/freegrok-static
+run alias_fg test -e /usr/local/bin/fg
+run alias_grok test -e /usr/local/bin/grok
+run alias_grok_build test -e /usr/local/bin/grok-build
+run helper_libexec sh -c 'test -x /usr/local/libexec/freegrok-jail-helper || test -x /usr/local/libexec/grok-jail-helper'
+run elf sh -c 'file /usr/local/bin/freegrok | grep -qi FreeBSD'
+run version sh -c 'freegrok --version >/dev/null'
 # Capture stdout only after a successful doctor --ci (exit 0).
-if grok-build doctor --ci >"$DOC"; then
+if freegrok doctor --ci >"$DOC"; then
 	ok doctor_ci
 else
 	bad doctor_ci
@@ -73,14 +75,18 @@ if grep -E "Sandbox backend: nono-" "$DOC" >/dev/null 2>&1; then
 else
 	ok no_nono_backend
 fi
-run jail_status sh -c 'grok-build jail status >/dev/null'
-run jail_help sh -c 'grok-build jail --help >/dev/null'
-run mcp_list sh -c 'grok-build mcp list >/dev/null'
-run doctor_ci_2 sh -c 'grok-build doctor --ci >/dev/null'
+run jail_status sh -c 'freegrok jail status >/dev/null'
+run jail_help sh -c 'freegrok jail --help >/dev/null'
+run mcp_list sh -c 'freegrok mcp list >/dev/null'
+run doctor_ci_2 sh -c 'freegrok doctor --ci >/dev/null'
 
 # Packaged helper: dry-run prints a plan; --apply without GROK_JAIL_ROOT
 # is fail-closed (exit 1 unprivileged, or 3 if somehow root without a root dir).
-HELPER=/usr/local/libexec/grok-jail-helper
+if [ -x /usr/local/libexec/freegrok-jail-helper ]; then
+	HELPER=/usr/local/libexec/freegrok-jail-helper
+else
+	HELPER=/usr/local/libexec/grok-jail-helper
+fi
 if "$HELPER" --dry-run --deny-write /tmp -- -- /usr/bin/true >/tmp/grok-helper-dry.out 2>&1; then
 	if grep -q "dry-run: not creating a jail" /tmp/grok-helper-dry.out; then
 		ok helper_dry_run

@@ -5,7 +5,7 @@
 #
 # Builds, runs doctor, installs via `make install` (PREFIX=/usr/local or
 # userspace fallback under a temp HOME), then exercises the installed
-# grok-build binary. Does not require root.
+# freegrok binary. Does not require root.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
@@ -68,12 +68,12 @@ if make install PREFIX=/usr/local >>"$LOG" 2>&1; then ok "make install"; else
 	exit 1
 fi
 
-if [ -x "$HOME/.local/bin/grok-build" ]; then
-	GB="$HOME/.local/bin/grok-build"
-elif [ -x /usr/local/bin/grok-build ]; then
-	GB=/usr/local/bin/grok-build
+if [ -x "$HOME/.local/bin/freegrok" ]; then
+	GB="$HOME/.local/bin/freegrok"
+elif [ -x /usr/local/bin/freegrok ]; then
+	GB=/usr/local/bin/freegrok
 else
-	bad "find installed grok-build"
+	bad "find installed freegrok"
 	exit 1
 fi
 ok "installed $GB"
@@ -118,12 +118,12 @@ if [ "$ec" -eq 0 ]; then ok "models"; else
 fi
 
 pref=$(dirname "$(dirname "$GB")")
-if [ -f "$pref/etc/bash_completion.d/grok-build" ]; then
+if [ -f "$pref/etc/bash_completion.d/freegrok" ]; then
 	ok "bash-completion-file"
 else
 	bad "bash-completion-file"
 fi
-if [ -f "$pref/share/doc/grok-build/doctor.md" ]; then
+if [ -f "$pref/share/doc/freegrok/doctor.md" ]; then
 	ok "doc-doctor-md"
 else
 	bad "doc-doctor-md"
@@ -133,10 +133,10 @@ note "uninstall + reinstall"
 if make uninstall PREFIX="$pref" >>"$LOG" 2>&1; then ok "uninstall"; else bad "uninstall"; fi
 if [ ! -e "$GB" ]; then ok "binary-removed"; else bad "binary-still-present"; fi
 if make install PREFIX=/usr/local >>"$LOG" 2>&1; then ok "reinstall"; else bad "reinstall"; fi
-if [ -x "$HOME/.local/bin/grok-build" ]; then
-	GB="$HOME/.local/bin/grok-build"
-elif [ -x /usr/local/bin/grok-build ]; then
-	GB=/usr/local/bin/grok-build
+if [ -x "$HOME/.local/bin/freegrok" ]; then
+	GB="$HOME/.local/bin/freegrok"
+elif [ -x /usr/local/bin/freegrok ]; then
+	GB=/usr/local/bin/freegrok
 fi
 run "post-reinstall-version" "$GB" --version
 run "post-reinstall-doctor-ci" "$GB" doctor --ci

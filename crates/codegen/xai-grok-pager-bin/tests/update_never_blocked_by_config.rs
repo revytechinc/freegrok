@@ -17,7 +17,8 @@ fn pager_binary() -> std::path::PathBuf {
         return std::path::absolute(&p)
             .unwrap_or_else(|e| panic!("failed to absolutize PAGER_BINARY {p}: {e}"));
     }
-    option_env!("CARGO_BIN_EXE_xai-grok-pager")
+    option_env!("CARGO_BIN_EXE_freegrok")
+        .or(option_env!("CARGO_BIN_EXE_xai-grok-pager"))
         .map(std::path::PathBuf::from)
         .expect("PAGER_BINARY is unset and this build is not `cargo test`")
 }

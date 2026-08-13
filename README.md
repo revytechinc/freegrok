@@ -1,55 +1,46 @@
 <div align="center">
 
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://media.x.ai/v1/website/spacexai-symbol-white-transparent-0c31957f.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png">
-    <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
-  </picture>
-  <br>
-  Grok Build (<code>grok</code>)
-</h1>
+<h1>FreeGrok (<code>freegrok</code>)</h1>
 
-**Grok Build** is SpaceXAI's terminal-based AI coding agent. It runs as a
-full-screen TUI that understands your codebase, edits files, executes shell
-commands, searches the web, and manages long-running tasks — interactively,
-headlessly for scripting/CI, or embedded in editors via the Agent Client
-Protocol (ACP).
+**FreeGrok** is the CloudBSD / RevyTech fork of the open-source Grok Build
+agent TUI. It runs as a full-screen terminal agent that understands your
+codebase, edits files, executes shell commands, searches the web, and
+manages long-running tasks — interactively, headlessly for scripting/CI, or
+embedded in editors via the Agent Client Protocol (ACP).
 
-[Installing the released binary](#installing-the-released-binary) ·
 [Building from source](#building-from-source) ·
+[Configuration](#configuration) ·
 [Documentation](#documentation) ·
 [Repository layout](#repository-layout) ·
 [Development](#development) ·
-[Contributing](#contributing) ·
 [License](#license)
 
-![Grok Build TUI](https://media.x.ai/v1/website/universe-tui-screenshot-6f7a0837.png)
+This repository is **[revytechinc/freegrok](https://github.com/revytechinc/freegrok)**.
+It is periodically synced from upstream `xai-org/grok-build`. Do **not** push
+this fork back to xAI.
 
-**Learn more about Grok Build at [x.ai/cli](https://x.ai/cli)**
-
-This repository contains the Rust source for the `grok` CLI/TUI and its agent
-runtime. It is synced periodically from the SpaceXAI monorepo.
-
-A small `SOURCE_REV` file at the root records the full monorepo commit SHA
+A small `SOURCE_REV` file at the root records the upstream monorepo commit SHA
 for the version of the code present in this tree.
 
 </div>
 
 ---
 
-## Installing the released binary
-
-Prebuilt binaries are published for macOS, Linux, and Windows:
+## Clone
 
 ```sh
-curl -fsSL https://x.ai/cli/install.sh | bash   # macOS / Linux / Git Bash
-irm https://x.ai/cli/install.ps1 | iex          # Windows PowerShell
-grok --version
+git clone git@github.com:revytechinc/freegrok.git
+cd freegrok
 ```
 
-See the [changelog](https://x.ai/build/changelog) for the latest fixes,
-features, and improvements in each release.
+HTTPS: `https://github.com/revytechinc/freegrok.git`
+
+## Installing the released binary
+
+Upstream xAI publishes official `grok` binaries at [x.ai/cli](https://x.ai/cli).
+This fork ships **`freegrok`** via source/`make install` and FreeBSD ports/pkg
+(see below). Compat names `grok`, `grok-build`, and short alias `fg` are
+installed as symlinks for one release.
 
 ## Building from source
 
@@ -76,19 +67,22 @@ From a clone on FreeBSD 14, 15, or 16 (dev):
 
 ```sh
 pkg install rust protobuf ripgrep         # once
-cd /path/to/grok-build
+cd /path/to/freegrok
 make build                                # always runs cargo (incremental)
 make doctor                               # offline self-check (doctor --ci)
 make install                              # → /usr/local if writable, else ~/.local
-grok-build --version && grok-build doctor --ci
+freegrok --version && freegrok doctor --ci
 ```
 
-**One install interface:** `make install` always installs **`grok-build`** with the same layout. It prefers `PREFIX` (default `/usr/local`). If that tree is not writable, it installs to `$HOME/.local` and prints a note — no separate target.
+**One install interface:** `make install` always installs **`freegrok`** (plus
+`freegrok-static`, `fg`, and compat `grok` / `grok-build` symlinks). It prefers
+`PREFIX` (default `/usr/local`). If that tree is not writable, it installs to
+`$HOME/.local` and prints a note — no separate target.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `PREFIX` | `/usr/local` | Preferred install root |
-| `BINNAME` | `grok-build` | Command name (avoids clashing with Linux brand `grok`) |
+| `BINNAME` | `freegrok` | Primary command name |
 | `DESTDIR` | empty | Staging root (no userspace fallback when set) |
 | `PROTOC` | `protoc` | Protobuf compiler |
 
@@ -102,17 +96,34 @@ make uninstall PREFIX=$$HOME/.local       # if install fell back
 ```sh
 export PROTOC=$(command -v protoc)        # FreeBSD / system protoc
 cargo run -p xai-grok-pager-bin           # build + launch the TUI
-cargo build -p xai-grok-pager-bin --release  # → target/release/xai-grok-pager
+cargo build -p xai-grok-pager-bin --release  # → target/release/freegrok
 cargo check -p xai-grok-pager-bin
 ```
 
-The cargo artifact is named `xai-grok-pager`. Official Linux/macOS installs ship it
-as `grok`. The FreeBSD Makefile installs it as **`grok-build`**. On first launch it
-opens a browser to authenticate — see the
-[authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
+The cargo artifact is **`freegrok`**. The crate package is still
+`xai-grok-pager-bin` (internal crate directories are not renamed in Phase A).
+On first launch FreeGrok copies a missing `~/.freegrok` from `~/.grok` (grok-build
+config tree) so existing skills, `config.toml`, auth, and hooks keep working.
+
+See the [authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
 
 FreeBSD ports packaging (optional, separate tree): see
-[`docs/freebsd-port-and-jail-sandbox.md`](docs/freebsd-port-and-jail-sandbox.md).
+[`docs/freebsd-port-and-jail-sandbox.md`](docs/freebsd-port-and-jail-sandbox.md)
+and the rebrand plan [`docs/freegrok-rebrand-plan.md`](docs/freegrok-rebrand-plan.md).
+
+## Configuration
+
+| Role | FreeGrok | grok-build compat |
+|------|----------|-------------------|
+| User home | `~/.freegrok` / `$FREEGROK_HOME` | copied from `~/.grok` / `$GROK_HOME` on first run |
+| Env vars | `FREEGROK_*` preferred | `GROK_*` still read |
+| Project dir | `.freegrok/` | copied from `.grok/` when dest is missing |
+| System dir | `/etc/freegrok` | `/etc/grok` if freegrok dir is absent |
+
+Skipped on migrate (regenerable / hostile): `downloads/`, `marketplace-cache/`,
+`memtrace/`, `logs/`, `vendor/`, `sandbox-blocked-dir.*`.
+
+Set `FREEGROK_NO_MIGRATE=1` to create an empty `~/.freegrok` instead of copying.
 
 ## Documentation
 
@@ -128,7 +139,7 @@ MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 
 | Path | Contents |
 |------|----------|
-| `crates/codegen/xai-grok-pager-bin` | Composition-root package; builds the `xai-grok-pager` binary |
+| `crates/codegen/xai-grok-pager-bin` | Composition-root package; builds the `freegrok` binary |
 | `crates/codegen/xai-grok-pager` | The TUI: scrollback, prompt, modals, rendering |
 | `crates/codegen/xai-grok-shell` | Agent runtime + leader/stdio/headless entry points |
 | `crates/codegen/xai-grok-tools` | Tool implementations (terminal, file edit, search, ...) |

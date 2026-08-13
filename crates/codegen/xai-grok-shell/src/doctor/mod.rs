@@ -1,4 +1,4 @@
-//! Product self-diagnostics (`grok doctor` / `grok-build doctor`).
+//! Product self-diagnostics (`freegrok doctor` / `grok-build doctor` compat).
 //!
 //! Default tier is **unprivileged and offline**: no network, no model calls,
 //! no sudo/doas, no FreeBSD jail creation. Opt-in flags (planned) open online,
@@ -210,9 +210,8 @@ pub async fn run(opts: DoctorOptions) -> anyhow::Result<i32> {
 pub async fn collect_report(opts: DoctorOptions) -> anyhow::Result<DoctorReport> {
     let opts = opts.normalize();
     // Pager-bin may pass a richer string via env; otherwise package version.
-    let version = std::env::var("GROK_DOCTOR_VERSION_OVERRIDE").unwrap_or_else(|_| {
-        format!("{} (shell)", env!("CARGO_PKG_VERSION"))
-    });
+    let version = std::env::var("GROK_DOCTOR_VERSION_OVERRIDE")
+        .unwrap_or_else(|_| format!("{} (shell)", env!("CARGO_PKG_VERSION")));
     let channel = std::env::var("GROK_CHANNEL").unwrap_or_else(|_| "unknown".into());
 
     let exe = std::env::current_exe()
@@ -275,10 +274,7 @@ pub async fn collect_report(opts: DoctorOptions) -> anyhow::Result<DoctorReport>
             release: checks::os_release(),
             arch: std::env::consts::ARCH.to_string(),
         },
-        binary: BinaryInfo {
-            path: exe,
-            brand,
-        },
+        binary: BinaryInfo { path: exe, brand },
         checks,
         summary,
         exit_code,
@@ -345,10 +341,7 @@ fn print_human(report: &DoctorReport) {
             Severity::Warn => "warn",
             Severity::Info => "info",
         };
-        println!(
-            "  {mark} [{sev}] {} — {}",
-            c.id, c.summary
-        );
+        println!("  {mark} [{sev}] {} — {}", c.id, c.summary);
         if let Some(ref d) = c.detail {
             for line in d.lines() {
                 println!("      {line}");
@@ -440,7 +433,8 @@ mod tests {
             .await
             .expect("doctor ci report");
         assert_eq!(
-            report.summary.fail, 0,
+            report.summary.fail,
+            0,
             "critical doctor failures in CI: {:?}",
             report
                 .checks
@@ -460,5 +454,4 @@ mod tests {
         assert_eq!(checks::parse_freebsd_major("bogus"), None);
         assert_eq!(checks::MIN_FREEBSD_MAJOR, 14);
     }
-
 }

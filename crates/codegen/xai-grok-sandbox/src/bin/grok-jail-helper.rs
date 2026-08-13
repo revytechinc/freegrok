@@ -118,11 +118,13 @@ fn main() -> ExitCode {
     }
 
     // Fail closed: do not jail path=/ (host root) — that is not a security boundary.
-    let root = std::env::var("GROK_JAIL_ROOT").unwrap_or_default();
+    let root = std::env::var("FREEGROK_JAIL_ROOT")
+        .or_else(|_| std::env::var("GROK_JAIL_ROOT"))
+        .unwrap_or_default();
     if root.is_empty() || !std::path::Path::new(&root).is_dir() {
         let _ = writeln!(
             io::stderr(),
-            "error: --apply refused: set GROK_JAIL_ROOT to a dedicated jail root directory\n\
+            "error: --apply refused: set FREEGROK_JAIL_ROOT (or GROK_JAIL_ROOT) to a dedicated jail root directory\n\
              (refusing host path=/). Dry-run succeeded; apply is opt-in and fail-closed."
         );
         return ExitCode::from(3);

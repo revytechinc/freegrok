@@ -42,17 +42,17 @@ run() {
 	fi
 }
 
-run inspect_json grok-build inspect
-run version_json grok-build version --json
-run jail_status_json grok-build jail status --json
+run inspect_json freegrok inspect
+run version_json freegrok version --json
+run jail_status_json freegrok jail status --json
 
 if [ "${GROK_LIVE:-0}" = "1" ]; then
 	CANARY=/tmp/l6-canary-$$
 	mkdir -p "$CANARY"
 	LIVE_MODEL=${GROK_LIVE_MODEL:-}
-	set -- grok-build --single "Reply with exactly the word PONG and nothing else."
+	set -- freegrok --single "Reply with exactly the word PONG and nothing else."
 	if [ -n "$LIVE_MODEL" ]; then
-		set -- grok-build -m "$LIVE_MODEL" --single "Reply with exactly the word PONG and nothing else."
+		set -- freegrok -m "$LIVE_MODEL" --single "Reply with exactly the word PONG and nothing else."
 	fi
 	set +e
 	timeout 180 "$@" >"$CANARY/pong.out" 2>&1
@@ -66,9 +66,9 @@ if [ "${GROK_LIVE:-0}" = "1" ]; then
 		tail -3 "$CANARY/pong.out" | cut -c1-200 || true
 	fi
 	if [ -n "$LIVE_MODEL" ]; then
-		set -- grok-build -m "$LIVE_MODEL" --single "Create a file named canary.txt containing exactly CANARY_OK. Use a file write tool if available. When done reply CANARY_DONE." --cwd "$CANARY"
+		set -- freegrok -m "$LIVE_MODEL" --single "Create a file named canary.txt containing exactly CANARY_OK. Use a file write tool if available. When done reply CANARY_DONE." --cwd "$CANARY"
 	else
-		set -- grok-build --single "Create a file named canary.txt containing exactly CANARY_OK. Use a file write tool if available. When done reply CANARY_DONE." --cwd "$CANARY"
+		set -- freegrok --single "Create a file named canary.txt containing exactly CANARY_OK. Use a file write tool if available. When done reply CANARY_DONE." --cwd "$CANARY"
 	fi
 	set +e
 	timeout 180 "$@" >"$CANARY/file.out" 2>&1

@@ -81,7 +81,7 @@ fn target_dir() -> PathBuf {
 fn local_grok_binary_path() -> PathBuf {
     target_dir()
         .join("debug")
-        .join(format!("xai-grok-pager{}", std::env::consts::EXE_SUFFIX))
+        .join(format!("freegrok{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn ensure_local_grok_binary(binary: &Path) {
@@ -92,48 +92,49 @@ fn ensure_local_grok_binary(binary: &Path) {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let mut cmd = Command::new(&cargo);
     cmd.current_dir(workspace_root())
-        .args([
-            "build",
-            "-p",
-            "xai-grok-pager-bin",
-            "--bin",
-            "xai-grok-pager",
-        ])
+        .args(["build", "-p", "xai-grok-pager-bin", "--bin", "freegrok"])
         .stdin(std::process::Stdio::null())
         .envs(xai_tty_utils::pager_env());
     xai_tty_utils::detach_std_command(&mut cmd);
     let output = cmd
         .output()
-        .unwrap_or_else(|e| panic!("failed to spawn {cargo} to build xai-grok-pager: {e}"));
+        .unwrap_or_else(|e| panic!("failed to spawn {cargo} to build freegrok: {e}"));
 
     assert!(
         output.status.success(),
-        "failed to build xai-grok-pager for lifecycle tests (exit {:?})\nstdout:\n{}\nstderr:\n{}",
+        "failed to build freegrok for lifecycle tests (exit {:?})\nstdout:\n{}\nstderr:\n{}",
         output.status.code(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
     assert!(
         binary.exists(),
-        "xai-grok-pager build completed but binary missing at {}",
+        "freegrok build completed but binary missing at {}",
         binary.display()
     );
 }
 
-/// Resolve grok binary: `GROK_BINARY` env (CI) or a locally built `xai-grok-pager` binary.
+/// Resolve grok binary: `GROK_BINARY`/`FREEGROK_BINARY` env (CI) or a locally
+/// built `freegrok` binary.
 pub fn grok_binary() -> PathBuf {
-    if let Ok(path) = std::env::var("GROK_BINARY") {
+    if let Ok(path) = std::env::var("FREEGROK_BINARY").or_else(|_| std::env::var("GROK_BINARY")) {
         let p = PathBuf::from(path);
-        assert!(p.exists(), "GROK_BINARY does not exist: {}", p.display());
+        assert!(
+            p.exists(),
+            "FREEGROK_BINARY/GROK_BINARY does not exist: {}",
+            p.display()
+        );
         // Bazel's GROK_BINARY is runfiles-relative; the harness spawns the child
         // with a different cwd, so absolutize against the (runfiles-root) cwd now.
         return std::path::absolute(&p).unwrap_or(p);
     }
 
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_xai-grok-pager") {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            return p;
+    for key in ["CARGO_BIN_EXE_freegrok", "CARGO_BIN_EXE_xai-grok-pager"] {
+        if let Ok(path) = std::env::var(key) {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return p;
+            }
         }
     }
 

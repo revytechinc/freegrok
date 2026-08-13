@@ -156,17 +156,17 @@ async fn run_setup_command(json: bool) {
     if !managed_config::has_principal() {
         eprintln!("No deployment key or team sign-in found.");
         eprintln!();
-        eprintln!("To install managed configuration, sign in with a team using `grok login`,");
+        eprintln!("To install managed configuration, sign in with a team using `freegrok login`,");
         eprintln!("or set a deployment key:");
         eprintln!();
         if cfg!(unix) {
-            eprintln!("  export GROK_DEPLOYMENT_KEY=<your-key>");
+            eprintln!("  export FREEGROK_DEPLOYMENT_KEY=<your-key>");
         } else {
-            eprintln!("  $env:GROK_DEPLOYMENT_KEY=\"<your-key>\"");
+            eprintln!("  $env:FREEGROK_DEPLOYMENT_KEY=\"<your-key>\"");
         }
-        eprintln!("  grok setup");
+        eprintln!("  freegrok setup");
         eprintln!();
-        eprintln!("Or add the key to ~/.grok/config.toml:");
+        eprintln!("Or add the key to ~/.freegrok/config.toml:");
         eprintln!();
         eprintln!("  [endpoints]");
         eprintln!("  deployment_key = \"<your-key>\"");
@@ -1106,7 +1106,7 @@ async fn run_agent_command(
     let is_leader = matches!(agent_args.mode, Some(AgentCmd::Leader(_)));
     if !is_stdio && !is_leader {
         eprintln!(
-            "Grok Build (pager) - v{}",
+            "FreeGrok (pager) - v{}",
             xai_grok_version::display_version_with_commit(
                 env!("VERSION_WITH_COMMIT"),
                 xai_grok_update::channel_label(),
@@ -1818,10 +1818,7 @@ fn dispatch_doctor_if_requested(args: &PagerArgs) -> bool {
     // Terminal clipboard/doctor fix path uses doctor_cmd.
     if doctor_args.wants_platform_doctor() {
         unsafe {
-            std::env::set_var(
-                "GROK_DOCTOR_VERSION_OVERRIDE",
-                env!("VERSION_WITH_COMMIT"),
-            );
+            std::env::set_var("GROK_DOCTOR_VERSION_OVERRIDE", env!("VERSION_WITH_COMMIT"));
             if let Some(ch) = xai_grok_update::channel_name() {
                 std::env::set_var("GROK_CHANNEL", ch);
             }
@@ -1888,7 +1885,7 @@ fn main() {
     xai_grok_pager::memory_trace::start(xai_grok_pager::memory_trace::default_dir());
     raise_fd_limit();
     if let Err(e) = xai_grok_config::validate_requirements() {
-        eprintln!("Couldn't start Grok: {e}");
+        eprintln!("Couldn't start FreeGrok: {e}");
         eprintln!();
         eprintln!(
             "Update Grok to a version the policy allows, or ask your administrator \
@@ -2307,9 +2304,9 @@ async fn async_main(args: PagerArgs) -> Result<()> {
         Ok(true) => {
             let adopted = bg_update_wait.lock().await.take();
             if finish_update_on_exit(adopted, &update_config).await {
-                eprintln!("Update installed. Run `grok` to start.");
+                eprintln!("Update installed. Run `freegrok` to start.");
             } else {
-                eprintln!("Update did not complete. Run `grok update` to retry.");
+                eprintln!("Update did not complete. Run `freegrok update` to retry.");
             }
             Ok(())
         }
@@ -2855,23 +2852,23 @@ mod tests {
         std::fs::create_dir_all(home.join("bin")).unwrap();
         std::fs::create_dir_all(home.join("downloads")).unwrap();
         assert!(!is_managed_install(
-            Some(home.join("bin").join("grok")),
+            Some(home.join("bin").join("freegrok")),
             &home
         ));
         assert!(!is_managed_install(None, &home));
         assert!(!is_managed_install(
-            Some(home.join("bin").join("grok")),
+            Some(home.join("bin").join("freegrok")),
             std::path::Path::new("")
         ));
-        let target = home.join("downloads").join("grok-1.2.3");
+        let target = home.join("downloads").join("freegrok-1.2.3");
         std::fs::write(&target, b"binary").unwrap();
-        std::os::unix::fs::symlink(&target, home.join("bin").join("grok")).unwrap();
+        std::os::unix::fs::symlink(&target, home.join("bin").join("freegrok")).unwrap();
         assert!(is_managed_install(
-            Some(home.join("bin").join("grok")),
+            Some(home.join("bin").join("freegrok")),
             &home
         ));
         assert!(is_managed_install(Some(target.clone()), &home));
-        let pinned = home.join("bin").join("grok-9.9.9");
+        let pinned = home.join("bin").join("freegrok-9.9.9");
         std::fs::write(&pinned, b"binary").unwrap();
         assert!(!is_managed_install(Some(pinned), &home));
         let _ = std::fs::remove_dir_all(&home);

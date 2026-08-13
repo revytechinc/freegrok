@@ -15,14 +15,23 @@ use std::process::Command;
 
 /// Env marker set when the process is running inside a grok-managed jail.
 pub const JAIL_ENV_VAR: &str = "__GROK_INSIDE_JAIL";
+/// FreeGrok env marker (read in addition to [`JAIL_ENV_VAR`]).
+pub const JAIL_ENV_VAR_FREEGROK: &str = "__FREEGROK_INSIDE_JAIL";
 
 /// Override path to the privileged jail helper binary.
 pub const JAIL_HELPER_ENV: &str = "GROK_JAIL_HELPER";
+/// FreeGrok override (preferred over [`JAIL_HELPER_ENV`] when set).
+pub const JAIL_HELPER_ENV_FREEGROK: &str = "FREEGROK_JAIL_HELPER";
 
 /// Default helper basenames searched on `PATH`.
-const DEFAULT_HELPER_NAMES: &[&str] = &["grok-jail-helper", "xai-grok-jail-helper"];
+const DEFAULT_HELPER_NAMES: &[&str] = &[
+    "freegrok-jail-helper",
+    "grok-jail-helper",
+    "xai-grok-jail-helper",
+];
 /// Packaged location (not setuid).
 const LIBEXEC_HELPERS: &[&str] = &[
+    "/usr/local/libexec/freegrok-jail-helper",
     "/usr/local/libexec/grok-jail-helper",
     "/usr/local/libexec/xai-grok-jail-helper",
 ];
@@ -33,7 +42,8 @@ const LIBEXEC_HELPERS: &[&str] = &[
 /// Also consults `security.jail.jailed` when available so a process started
 /// under an external jail is not double-wrapped.
 pub fn is_inside_jail() -> bool {
-    if std::env::var_os(JAIL_ENV_VAR).is_some() {
+    if std::env::var_os(JAIL_ENV_VAR_FREEGROK).is_some() || std::env::var_os(JAIL_ENV_VAR).is_some()
+    {
         return true;
     }
     sysctl_jail_jailed().unwrap_or(false)
@@ -68,20 +78,30 @@ pub fn sysctl_jail_jailed() -> Option<bool> {
 ///    fallback). A bad override must not silently pick the packaged helper.
 /// 2. First of [`DEFAULT_HELPER_NAMES`] on `PATH`.
 /// 3. Packaged [`LIBEXEC_HELPERS`] (`/usr/local/libexec/...`).
-pub fn resolve_jail_helper() -> Option<PathBuf> {
-    match std::env::var(JAIL_HELPER_ENV) {
+fn helper_from_env(name: &str) -> Option<Option<PathBuf>> {
+    match std::env::var(name) {
         Ok(path) => {
             let pb = PathBuf::from(&path);
             if pb.is_file() {
-                return Some(pb);
+                return Some(Some(pb));
             }
             tracing::debug!(
                 path = %path,
-                "{JAIL_HELPER_ENV} set but not a file; not falling back to PATH or libexec"
+                "{name} set but not a file; not falling back to PATH or libexec"
             );
-            return None;
+            Some(None)
         }
-        Err(_) => {}
+        Err(_) => None,
+    }
+}
+
+pub fn resolve_jail_helper() -> Option<PathBuf> {
+    // FREEGROK_JAIL_HELPER, if set, is exclusive and fail-closed.
+    if let Some(result) = helper_from_env(JAIL_HELPER_ENV_FREEGROK) {
+        return result;
+    }
+    if let Some(result) = helper_from_env(JAIL_HELPER_ENV) {
+        return result;
     }
     for name in DEFAULT_HELPER_NAMES {
         if let Ok(path) = which(name) {
@@ -120,10 +140,7 @@ fn which(bin: &str) -> Result<PathBuf, ()> {
 /// `helper --deny-write PATH ... --deny-read PATH ... -- -- exe args...`
 /// The helper is responsible for jail setup, setting [`JAIL_ENV_VAR`], and
 /// exec'ing the payload. Real helper semantics land with Phase 2 completion.
-pub fn jail_reexec_command(
-    deny_write: &[&str],
-    deny_read: &[&str],
-) -> Option<Command> {
+pub fn jail_reexec_command(deny_write: &[&str], deny_read: &[&str]) -> Option<Command> {
     if is_inside_jail() {
         return None;
     }
@@ -160,10 +177,7 @@ pub fn jail_reexec_command(
 ///
 /// Resolves deny lists from the profile when possible; Phase 2 helper still
 /// owns mount/nullfs planning. Returns `None` if already jailed or no helper.
-pub fn jail_reexec_for_profile(
-    profile: &crate::ProfileName,
-    workspace: &Path,
-) -> Option<Command> {
+pub fn jail_reexec_for_profile(profile: &crate::ProfileName, workspace: &Path) -> Option<Command> {
     if is_inside_jail() {
         return None;
     }
