@@ -2,23 +2,11 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
-static GROK_HOME: OnceLock<PathBuf> = OnceLock::new();
-
-/// Directory names under a legacy `~/.grok` tree that must not be copied into
-/// `~/.freegrok` (regenerable caches, hostile sandbox fixtures, or huge blobs).
-const MIGRATE_SKIP_DIR_NAMES: &[&str] = &[
-    "downloads",
-    "marketplace-cache",
-    "memtrace",
-    "logs",
-    "vendor",
-];
-
-/// Marker written into a copied FreeGrok home so we can tell a tree was
-/// migrated from grok-build rather than created empty.
-pub const MIGRATED_FROM_GROK_MARKER: &str = ".migrated-from-grok";
+pub use xai_grok_home::{
+    HomeResolution, MIGRATED_FROM_GROK_MARKER, copy_grok_tree, default_freegrok_home,
+    default_grok_home, grok_home, resolve_user_home, user_grok_home,
+};
 
 /// Look up `FREEGROK_{suffix}` then `GROK_{suffix}`. Empty values are ignored.
 pub fn env_var(suffix: &str) -> Option<String> {
@@ -40,136 +28,6 @@ fn nonempty_env(name: &str) -> Option<String> {
             Some(t.to_string())
         }
     })
-}
-
-fn should_skip_migrate_name(name: &str) -> bool {
-    MIGRATE_SKIP_DIR_NAMES.contains(&name) || name.starts_with("sandbox-blocked")
-}
-
-fn staging_path(dest: &Path) -> PathBuf {
-    let mut s = dest.as_os_str().to_os_string();
-    s.push(".migrating");
-    PathBuf::from(s)
-}
-
-/// Recursively copy `src` → `dest` for a grok-build → FreeGrok tree migrate.
-///
-/// Returns `Ok(true)` when a copy was performed, `Ok(false)` when dest already
-/// exists or src is missing. Skips cache/hostile directory names.
-pub fn copy_grok_tree(src: &Path, dest: &Path) -> std::io::Result<bool> {
-    if dest.exists() {
-        return Ok(false);
-    }
-    if !src.exists() {
-        return Ok(false);
-    }
-    let staging = staging_path(dest);
-    if staging.exists() {
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-    copy_tree_filtered(src, &staging)?;
-    std::fs::write(
-        staging.join(MIGRATED_FROM_GROK_MARKER),
-        format!("source={}\n", src.display()),
-    )?;
-    match std::fs::rename(&staging, dest) {
-        Ok(()) => Ok(true),
-        Err(e) => {
-            if dest.exists() {
-                let _ = std::fs::remove_dir_all(&staging);
-                Ok(false)
-            } else {
-                let _ = std::fs::remove_dir_all(&staging);
-                Err(e)
-            }
-        }
-    }
-}
-
-fn copy_tree_filtered(src: &Path, dest: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dest)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if should_skip_migrate_name(&name_str) {
-            continue;
-        }
-        let from = entry.path();
-        let to = dest.join(&name);
-        let ft = entry.file_type()?;
-        if ft.is_dir() {
-            copy_tree_filtered(&from, &to)?;
-        } else if ft.is_symlink() {
-            #[cfg(unix)]
-            {
-                let target = std::fs::read_link(&from)?;
-                let _ = std::os::unix::fs::symlink(target, &to);
-            }
-            #[cfg(not(unix))]
-            {
-                if from.is_dir() {
-                    copy_tree_filtered(&from, &to)?;
-                } else {
-                    std::fs::copy(&from, &to)?;
-                }
-            }
-        } else {
-            std::fs::copy(&from, &to)?;
-            #[cfg(unix)]
-            {
-                if let Ok(meta) = std::fs::metadata(&from) {
-                    let _ = std::fs::set_permissions(&to, meta.permissions());
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Result of resolving the per-user config home (testable; no process env).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HomeResolution {
-    pub path: PathBuf,
-    pub copied_from: Option<PathBuf>,
-}
-
-/// Resolve the user config home from explicit env + default paths.
-///
-/// Precedence:
-/// 1. `freegrok_home` (`FREEGROK_HOME`)
-/// 2. `grok_home` (`GROK_HOME`)
-/// 3. `default_fg` (`~/.freegrok`) after optionally copying `default_legacy`
-///    (`~/.grok`) into it when dest is missing
-pub fn resolve_user_home(
-    freegrok_home: Option<&str>,
-    grok_home: Option<&str>,
-    default_fg: &Path,
-    default_legacy: &Path,
-    migrate: bool,
-) -> HomeResolution {
-    if let Some(v) = freegrok_home.map(str::trim).filter(|s| !s.is_empty()) {
-        return HomeResolution {
-            path: PathBuf::from(v),
-            copied_from: None,
-        };
-    }
-    if let Some(v) = grok_home.map(str::trim).filter(|s| !s.is_empty()) {
-        return HomeResolution {
-            path: PathBuf::from(v),
-            copied_from: None,
-        };
-    }
-    let mut copied_from = None;
-    if migrate && !default_fg.exists() && default_legacy.exists() {
-        if copy_grok_tree(default_legacy, default_fg).ok() == Some(true) {
-            copied_from = Some(default_legacy.to_path_buf());
-        }
-    }
-    HomeResolution {
-        path: default_fg.to_path_buf(),
-        copied_from,
-    }
 }
 
 /// Project config directory: copy `.grok` → `.freegrok` when dest is missing,
@@ -202,74 +60,6 @@ const CLAUDE_MANAGED_SETTINGS_PATH: &str =
     "/Library/Application Support/ClaudeCode/managed-settings.json";
 #[cfg(target_os = "linux")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str = "/etc/claude-code/managed-settings.json";
-
-fn user_home_dir() -> PathBuf {
-    #[allow(deprecated)]
-    let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    dunce::canonicalize(&home).unwrap_or(home)
-}
-
-/// The default *legacy* grok-build directory (`~/.grok`). Used as the copy
-/// source when migrating into [`default_freegrok_home`].
-///
-/// Uses [`dunce::canonicalize`] instead of [`std::fs::canonicalize`]: on
-/// Windows, std returns a verbatim path (`\\?\C:\Users\...`) which external
-/// tools choke on — e.g. `git clone` rejects `\\?\` destinations with
-/// "Invalid argument", breaking marketplace cache clones under
-/// `~/.grok/marketplace-cache`. `dunce` strips the prefix whenever the path
-/// is safely representable in legacy form; on non-Windows it is identical to
-/// `std::fs::canonicalize`.
-///
-/// Keep the dunce canonicalization in sync with the hand-rolled duplicate in
-/// `xai_fast_worktree::db::resolve_grok_home` (deliberately standalone crate).
-pub fn default_grok_home() -> PathBuf {
-    user_home_dir().join(".grok")
-}
-
-/// The default FreeGrok user directory (`~/.freegrok`, canonicalized).
-pub fn default_freegrok_home() -> PathBuf {
-    user_home_dir().join(".freegrok")
-}
-
-/// Per-user config directory.
-///
-/// Order: `$FREEGROK_HOME` → `$GROK_HOME` → `~/.freegrok` (copying `~/.grok`
-/// into it when dest is missing). Created if needed.
-pub fn grok_home() -> PathBuf {
-    GROK_HOME
-        .get_or_init(|| {
-            let migrate = std::env::var_os("FREEGROK_NO_MIGRATE").is_none();
-            let resolved = resolve_user_home(
-                nonempty_env("FREEGROK_HOME").as_deref(),
-                nonempty_env("GROK_HOME").as_deref(),
-                &default_freegrok_home(),
-                &default_grok_home(),
-                migrate,
-            );
-            if let Some(src) = &resolved.copied_from {
-                eprintln!(
-                    "freegrok: copied grok-build config from {} → {}",
-                    src.display(),
-                    resolved.path.display()
-                );
-            }
-            let _ = std::fs::create_dir_all(&resolved.path);
-            resolved.path
-        })
-        .clone()
-}
-
-/// The user-global grok home, but only when one genuinely resolves: `Some` when
-/// `$FREEGROK_HOME`/`$GROK_HOME` is set or a home directory is found, `None`
-/// otherwise. Unlike [`grok_home()`], this never falls back to a cwd-relative
-/// `.grok`, so callers that *scan* user-global grok resources (hooks,
-/// marketplace sources, ...) don't mistake a project's `.grok` tree for the
-/// user-global one when no home resolves.
-pub fn user_grok_home() -> Option<PathBuf> {
-    #[allow(deprecated)]
-    let resolvable = env_var_os("HOME").is_some() || std::env::home_dir().is_some();
-    resolvable.then(grok_home)
-}
 
 /// Canonical application path: `$FREEGROK_HOME/bin/freegrok` (Unix) or
 /// `freegrok.exe` (Windows).
