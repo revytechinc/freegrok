@@ -1,4 +1,4 @@
-# Diagnostics (`grok doctor`)
+# Diagnostics (`freegrok doctor`)
 
 Product self-checks for the **installed** binary. This is not a full test suite (see `cargo test` / `scripts/freebsd-regression.sh` for developers).
 
@@ -9,10 +9,10 @@ Stay offline by default. Do not require admin or network unless you opt in.
 ## Quick start
 
 ```bash
-grok doctor              # human report
-grok doctor --json       # machine-readable
-grok doctor --quick      # critical subset
-grok doctor --ci         # build gate: offline, fail only on critical, ≤15s
+freegrok doctor              # human report
+freegrok doctor --json       # machine-readable
+freegrok doctor --quick      # critical subset
+freegrok doctor --ci         # build gate: offline, fail only on critical, ≤15s
 ```
 
 On FreeBSD ports packages that ship as **`grok-build`**, use that command name.
@@ -61,7 +61,7 @@ Typical critical checks:
 - Binary identity (e.g. FreeBSD ELF vs Linux brand under linuxulator)
 - FreeBSD version floor (**14, 15, 16**; 16 = CURRENT/dev)
 - System `rg` on `PATH` (FreeBSD does not bundle BurntSushi rg assets)
-- Writable `~/.grok` and temp dir
+- Writable `~/.freegrok` (and `~/.grok` when copied) and temp dir
 - Config load
 - Shell spawn
 - Sandbox backend status (info / warn if jail helper absent)

@@ -53,4 +53,4 @@ Automate, script, and integrate Grok Build with other systems.
 | 23 | [Agent Dashboard](23-dashboard.md) | Central overview of local sessions and forks |
 | 24 | [Monitoring Usage (External OpenTelemetry)](24-monitoring-usage.md) | Customer OTEL export |
 | 25 | [Status Line](25-status-line.md) | The bottom status row: built-in segments, command scripts, and the stdin JSON contract |
-| 26 | [Diagnostics (`freegrok doctor`)](25-doctor.md) | Product self-checks, build gate `--ci`, FreeBSD notes |
+| 26 | [Diagnostics (`freegrok doctor`)](26-doctor.md) | Product self-checks, build gate `--ci`, FreeBSD notes |

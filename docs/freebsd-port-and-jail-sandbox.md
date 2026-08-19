@@ -69,7 +69,7 @@ Grok Build FreeBSD work lives on branch **`freebsd-port-plan`**. Phase 0–1a ar
 | Jail helper | Phase 2: `grok-jail-helper` in `/usr/local/libexec` (not setuid). `--apply` fail-closed without `GROK_JAIL_ROOT`. `GROK_JAIL_HELPER` set-but-missing disables PATH/libexec fallback. Real `jail(8)` create still refused. |
 | Offline crates | Full `CARGO_CRATES` for poudriere still open |
 
-User-facing docs: `crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md` (FreeBSD), `25-doctor.md`.
+User-facing docs: `crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md` (FreeBSD), `26-doctor.md`.
 
 Update this table when you complete work (date, host OS, rustc, pass/fail).
 

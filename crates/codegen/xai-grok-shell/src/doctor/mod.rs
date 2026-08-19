@@ -315,7 +315,7 @@ where
 
 fn print_human(report: &DoctorReport) {
     println!();
-    println!("Grok Doctor");
+    println!("FreeGrok Doctor");
     println!("  Version:  {}", report.grok_version);
     println!("  Channel:  {}", report.channel);
     println!(

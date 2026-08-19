@@ -5,7 +5,7 @@ Control what Grok can access and do: permission modes, allow/ask/deny rules, hoo
 - **Modes** set how often Grok asks for approval (always-approve, auto, ask, and related).
 - **Rules** set which tools are allowed, asked about, or blocked within that baseline.
 
-For OS isolation profiles (including FreeBSD jail status and optional helper setup), see [Sandbox Mode](18-sandbox.md). For product self-checks, see [Diagnostics](25-doctor.md).
+For OS isolation profiles (including FreeBSD jail status and optional helper setup), see [Sandbox Mode](18-sandbox.md). For product self-checks, see [Diagnostics](26-doctor.md).
 
 ---
 

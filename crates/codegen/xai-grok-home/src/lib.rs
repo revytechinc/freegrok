@@ -14,6 +14,7 @@
 //! TODO: collapse these getters by threading the path through config as an
 //! explicit value.
 
+#[cfg(test)]
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -181,6 +182,10 @@ pub fn resolve_user_home(
 /// `$FREEGROK_HOME` / `$GROK_HOME` verbatim when non-empty, else `<home>/.grok`
 /// (legacy shape used by callers that only pass a single env). Prefer
 /// [`resolve_user_home`] for FreeGrok product resolution.
+///
+/// Production resolution goes through [`resolve_user_home`]; this helper is the
+/// characterization surface for the single-env GROK_HOME path.
+#[cfg(test)]
 fn resolve_grok_home_from(
     grok_home_env: Option<&OsStr>,
     os_home: Option<&Path>,

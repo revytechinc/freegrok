@@ -3,7 +3,7 @@
 User-facing guides live with the pager package and are what ship under `~/.freegrok/docs/user-guide/` (copied from `~/.grok` on first run):
 
 - [User guide index](../crates/codegen/xai-grok-pager/docs/user-guide/README.md)
-- [Diagnostics (`freegrok doctor`)](../crates/codegen/xai-grok-pager/docs/user-guide/25-doctor.md)
+- [Diagnostics (`freegrok doctor`)](../crates/codegen/xai-grok-pager/docs/user-guide/26-doctor.md)
 - [Sandbox Mode](../crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md) (includes FreeBSD)
 - [FreeGrok rebrand plan](./freegrok-rebrand-plan.md)
 

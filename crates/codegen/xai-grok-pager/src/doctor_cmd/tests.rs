@@ -92,6 +92,20 @@ fn unavailable_tmux_facts() -> TmuxProbeFacts {
     }
 }
 
+#[test]
+fn human_header_is_freegrok_doctor() {
+    let text = human::format(&healthy_report());
+    assert!(
+        text.starts_with("FreeGrok Doctor\n"),
+        "doctor human header must be FreeGrok, got: {:?}",
+        text.lines().next()
+    );
+    assert!(
+        !text.starts_with("Grok Doctor\n"),
+        "upstream Grok Doctor header must not leak in FreeGrok"
+    );
+}
+
 fn healthy_report() -> DiagnosticReport {
     DiagnosticReport {
         facts: DiagnosticFacts {
@@ -354,7 +368,7 @@ fn human_wayland_error_includes_detail_once() {
     assert_eq!(
         human::format(&report),
         concat!(
-            "Grok Doctor\n",
+            "FreeGrok Doctor\n",
             "\n",
             "Environment\n",
             "  · terminal                     Ghostty\n",
@@ -463,7 +477,7 @@ fn human_healthy_fixture_is_exact() {
     assert_eq!(
         human::format(&healthy_report()),
         concat!(
-            "Grok Doctor\n",
+            "FreeGrok Doctor\n",
             "\n",
             "Environment\n",
             "  · terminal                     Ghostty\n",
@@ -490,7 +504,7 @@ fn human_mixed_fixture_is_exact() {
     assert_eq!(
         human::format(&mixed_report()),
         concat!(
-            "Grok Doctor\n",
+            "FreeGrok Doctor\n",
             "\n",
             "Environment\n",
             "  · terminal                     Ghostty\n",
@@ -527,7 +541,7 @@ fn human_mixed_fixture_is_exact() {
             "  ? tmux.control-mode            error: server unavailable\n",
             "\n",
             "Needs a running session\n",
-            "  Some checks only run in Grok. Start Grok and run /doctor.\n",
+            "  Some checks only run in FreeGrok. Start FreeGrok and run /doctor.\n",
             "\n",
             "1 issue, 1 recommendation\n",
         )
@@ -650,7 +664,7 @@ fn human_incomplete_fixture_is_exact_without_duplicate_probe_rows() {
     assert_eq!(
         human::format(&report),
         concat!(
-            "Grok Doctor\n",
+            "FreeGrok Doctor\n",
             "\n",
             "Environment\n",
             "  · terminal                     Ghostty\n",
@@ -668,7 +682,7 @@ fn human_incomplete_fixture_is_exact_without_duplicate_probe_rows() {
             "  · status                       confirmed\n",
             "\n",
             "Needs a running session\n",
-            "  Some checks only run in Grok. Start Grok and run /doctor.\n",
+            "  Some checks only run in FreeGrok. Start FreeGrok and run /doctor.\n",
             "\n",
             "0 issues, 0 recommendations\n",
         )

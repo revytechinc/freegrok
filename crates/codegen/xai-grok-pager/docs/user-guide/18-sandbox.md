@@ -332,4 +332,4 @@ grok jail setup --full
 
 On FreeBSD packages that install as `grok-build`, use that name instead of `grok`.
 
-Decline setup anytime — Grok keeps working. See also [Diagnostics (`grok doctor`)](25-doctor.md) and the FreeBSD engineering notes in the source tree (`docs/freebsd-port-and-jail-sandbox.md`).
+Decline setup anytime — Grok keeps working. See also [Diagnostics (`freegrok doctor`)](26-doctor.md) and the FreeBSD engineering notes in the source tree (`docs/freebsd-port-and-jail-sandbox.md`).

@@ -160,7 +160,7 @@ _install_docs:
 	-install -m 644 docs/freebsd-port-and-jail-sandbox.md \
 		"$(DESTDIR)$(DOCDIR)/" 2>/dev/null || true
 	-install -m 644 \
-		crates/codegen/xai-grok-pager/docs/user-guide/25-doctor.md \
+		crates/codegen/xai-grok-pager/docs/user-guide/26-doctor.md \
 		"$(DESTDIR)$(DOCDIR)/doctor.md" 2>/dev/null || true
 	-install -m 644 \
 		crates/codegen/xai-grok-pager/docs/user-guide/18-sandbox.md \
