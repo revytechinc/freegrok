@@ -2376,17 +2376,31 @@ fn build_update_config() -> UpdateConfig {
     }
     config
 }
+/// FreeGrok must not pull xAI Grok installers. Flip to `true` when we have
+/// our own update channel.
+const FREEGROK_UPDATER_ENABLED: bool = false;
+
+const FREEGROK_UPDATER_OFF_TEXT: &str = "\
+FreeGrok updater is off for now (it would install xAI Grok builds).
+Install updates via the FreeGrok package (pkg/deb) or rebuild from source.";
+
 /// Central gate for auto-update checks; add new suppression rules here,
 /// not at call sites.
 fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
+    if !FREEGROK_UPDATER_ENABLED {
+        return false;
+    }
     if cfg!(debug_assertions) {
         return false;
     }
     if no_auto_update_flag {
         return false;
     }
-    !std::env::var_os("GROK_DISABLE_AUTOUPDATER")
-        .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()))
+    let grok_off = std::env::var_os("GROK_DISABLE_AUTOUPDATER")
+        .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()));
+    let fg_off = std::env::var_os("FREEGROK_DISABLE_AUTOUPDATER")
+        .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()));
+    !(grok_off || fg_off)
 }
 /// Gate for the stdio agent's background auto-update: only the direct stdio
 /// agent, from the managed install. Other modes update in `run_agent_command`.
@@ -2456,6 +2470,21 @@ async fn run_update_command(
 ) -> Result<()> {
     if json && !check {
         anyhow::bail!("--json requires --check");
+    }
+    if !FREEGROK_UPDATER_ENABLED {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "disabled": true,
+                    "product": "freegrok",
+                    "message": FREEGROK_UPDATER_OFF_TEXT,
+                })
+            );
+        } else {
+            println!("{FREEGROK_UPDATER_OFF_TEXT}");
+        }
+        return Ok(());
     }
     let mut update_config = base_update_config.clone();
     if check {
@@ -2855,6 +2884,18 @@ mod tests {
         assert!(!is_managed_install(Some(pinned), &home));
         let _ = std::fs::remove_dir_all(&home);
     }
+    #[test]
+    fn freegrok_updater_is_compile_time_off() {
+        assert!(
+            !FREEGROK_UPDATER_ENABLED,
+            "FreeGrok must not enable the xAI Grok updater until we have our own channel"
+        );
+        assert!(
+            !should_check_for_updates(false),
+            "background auto-update must stay off while FREEGROK_UPDATER_ENABLED is false"
+        );
+    }
+
     /// Pins the gate composition; a dropped conjunct fails its named case.
     #[test]
     fn stdio_auto_update_requires_direct_stdio_enabled_and_managed() {

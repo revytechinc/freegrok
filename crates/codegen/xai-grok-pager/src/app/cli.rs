@@ -88,7 +88,7 @@ See ~/.grok/README.md for more information.
     Export(crate::export_cmd::ExportArgs),
     /// Export or upload session trace data
     Trace(crate::trace_cmd::TraceArgs),
-    /// Check for updates or install a specific version
+    /// Updates (disabled in FreeGrok; would install xAI Grok builds)
     Update {
         /// Check for updates without installing.
         #[arg(long)]
