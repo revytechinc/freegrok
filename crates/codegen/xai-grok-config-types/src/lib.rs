@@ -1106,6 +1106,37 @@ impl RemoteSettings {
             .as_ref()
             .is_some_and(|list| list.iter().any(|t| t == tool))
     }
+
+    /// Drop xAI marketing payloads. Keeps functional fields (models, feature
+    /// flags, OAuth). No-op when [`FREEGROK_IGNORE_REMOTE_MARKETING`] is false.
+    pub fn strip_remote_marketing(&mut self) {
+        if !FREEGROK_IGNORE_REMOTE_MARKETING {
+            return;
+        }
+        self.announcements = Some(Vec::new());
+        self.tips = Some(Vec::new());
+        self.plugin_cta = Some(false);
+        self.official_marketplace_auto_register = Some(false);
+        self.campaigns.clear();
+        self.slash_command_tags = None;
+        self.subscription_watch_interval_secs = None;
+    }
+
+    /// [`strip_remote_marketing`] consuming variant for ingest maps.
+    pub fn without_remote_marketing(mut self) -> Self {
+        self.strip_remote_marketing();
+        self
+    }
+}
+
+/// Compile-time: FreeGrok treats xAI `/v1/settings` marketing as hostile.
+/// Flip to `false` only if this fork hosts its own announcement channel.
+pub const FREEGROK_IGNORE_REMOTE_MARKETING: bool = true;
+
+/// Runtime alias of [`FREEGROK_IGNORE_REMOTE_MARKETING`] so call sites do not
+/// duplicate the const name.
+pub fn ignore_remote_marketing() -> bool {
+    FREEGROK_IGNORE_REMOTE_MARKETING
 }
 /// Remote enable tier for the per-tip contextual hints (mirrors the client's
 /// `[ui.contextual_hints]` shape). Each field is a soft default for one tip;
@@ -1389,6 +1420,44 @@ mod tests {
         let json = r#"{}"#;
         let settings: RemoteSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.announcements, None);
+    }
+    /// Wire parse stays faithful; sanitizer drops marketing while keeping
+    /// functional fields (the user's configured default model).
+    #[test]
+    fn strip_remote_marketing_drops_xai_promo_keeps_default_model() {
+        assert!(
+            FREEGROK_IGNORE_REMOTE_MARKETING,
+            "FreeGrok must ignore xAI announcements/tips/campaigns"
+        );
+        let json = r#"{
+            "announcements": [{"id":"promo","title":"Grok 4.5 is here. Upgrade now.","message":"Upgrade now."}],
+            "tips": ["Try SuperGrok"],
+            "plugin_cta": true,
+            "official_marketplace_auto_register": true,
+            "campaigns": [{"id":"c","models":{"default":"grok-4"}}],
+            "slash_command_tags": {"commit":"new"},
+            "subscription_watch_interval_secs": 30,
+            "default_model": "my-litellm-model"
+        }"#;
+        let mut settings: RemoteSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            settings
+                .announcements
+                .as_ref()
+                .and_then(|a| a.first())
+                .and_then(|a| a.title.as_deref()),
+            Some("Grok 4.5 is here. Upgrade now."),
+            "deserialize must keep the wire copy so tests of the parser stay honest"
+        );
+        settings.strip_remote_marketing();
+        assert_eq!(settings.announcements.as_deref(), Some(&[][..]));
+        assert_eq!(settings.tips.as_deref(), Some(&[][..]));
+        assert_eq!(settings.plugin_cta, Some(false));
+        assert_eq!(settings.official_marketplace_auto_register, Some(false));
+        assert!(settings.campaigns.is_empty());
+        assert_eq!(settings.slash_command_tags, None);
+        assert_eq!(settings.subscription_watch_interval_secs, None);
+        assert_eq!(settings.default_model.as_deref(), Some("my-litellm-model"));
     }
     #[test]
     fn remote_settings_announcements_populated() {

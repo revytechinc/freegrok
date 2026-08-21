@@ -27,7 +27,7 @@ use xai_grok_pager_pty_harness::{
 
 const ROWS: u16 = 50;
 const COLS: u16 = 120;
-const BANNER_TITLE: &str = "Help improve Grok";
+const BANNER_TITLE: &str = "Data sharing";
 const OPT_OUT: &str = "[Opt out]";
 const OPT_IN: &str = "[Opt in]";
 const ACK: &str = "BANNERACK";

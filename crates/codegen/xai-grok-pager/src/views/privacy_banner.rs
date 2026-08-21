@@ -10,14 +10,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 /// Shares its row with the buttons.
-const PRIVACY_BANNER_TITLE: &str = "Help improve Grok";
+const PRIVACY_BANNER_TITLE: &str = "Data sharing";
 
-const PRIVACY_BANNER_DESC: &str = "Off by default. Opt-in to allow SpaceXAI to retain coding \
-     data, e.g., prompts, traces, & metrics, for training and debugging purposes. Change \
-     anytime via settings.";
+const PRIVACY_BANNER_DESC: &str = "Off by default. Opt-in to retain coding data, e.g., prompts, \
+     traces, & metrics, for local debugging. Change anytime via settings.";
 
-pub(crate) const PRIVACY_BANNER_TERMS_URL: &str = "https://x.ai/legal/terms-of-service";
-pub(crate) const PRIVACY_BANNER_POLICY_URL: &str = "https://x.ai/legal/privacy-policy";
+pub(crate) const PRIVACY_BANNER_TERMS_URL: &str = "https://github.com/revytechinc/freegrok";
+pub(crate) const PRIVACY_BANNER_POLICY_URL: &str =
+    "https://github.com/revytechinc/freegrok/blob/main/LICENSE";
 
 /// `(text, url_when_link)`.
 type LegalSegment = (&'static str, Option<&'static str>);
@@ -324,6 +324,14 @@ mod tests {
             .skip(rect.x as usize)
             .take(rect.width as usize)
             .collect()
+    }
+
+    #[test]
+    fn title_is_not_help_improve_grok() {
+        assert_ne!(PRIVACY_BANNER_TITLE, "Help improve Grok");
+        assert!(!PRIVACY_BANNER_TITLE.contains("Grok"));
+        assert!(!PRIVACY_BANNER_TERMS_URL.contains("x.ai"));
+        assert!(!PRIVACY_BANNER_POLICY_URL.contains("x.ai"));
     }
 
     /// Slot owners reserve [`height`] rows, so the last one it promises must

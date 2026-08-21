@@ -66,7 +66,36 @@ pub fn resolve_announcements(
         .unwrap_or_default();
     let usr = user.map(announcements_from_toml).unwrap_or_default();
     let mgd = managed.map(announcements_from_toml).unwrap_or_default();
-    let remote_slice = remote.unwrap_or_default();
+    let empty: &[RemoteAnnouncement] = &[];
+    let remote_slice = if xai_grok_config_types::ignore_remote_marketing() {
+        empty
+    } else {
+        remote.unwrap_or_default()
+    };
 
     merge_announcements(&[&req, remote_slice, &usr, &mgd])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_announcements_ignores_remote_xai_marketing() {
+        assert!(
+            xai_grok_config_types::FREEGROK_IGNORE_REMOTE_MARKETING,
+            "FreeGrok must ignore remote announcements[]"
+        );
+        let remote = vec![RemoteAnnouncement {
+            id: Some("promo".into()),
+            title: Some("Grok 4.5 is here. Upgrade now.".into()),
+            message: Some("Upgrade now.".into()),
+            ..Default::default()
+        }];
+        let got = resolve_announcements(None, None, None, Some(&remote));
+        assert!(
+            got.is_empty(),
+            "xAI announcements must not reach the welcome hero: {got:?}"
+        );
+    }
 }

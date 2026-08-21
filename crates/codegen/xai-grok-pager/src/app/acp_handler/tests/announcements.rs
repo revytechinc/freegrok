@@ -53,10 +53,10 @@
         assert!(first, "gen 1 must apply after the reconnect reset");
         assert_eq!(app.announcements_last_gen, 1);
         assert!(
-            app.active_announcements
+            !app.active_announcements
                 .iter()
                 .any(|a| a.id.as_deref() == Some("fresh")),
-            "pushed announcement must land"
+            "FreeGrok must ignore remote xAI announcements (id=fresh)"
         );
 
         // The per-client seed broadcast can deliver the same gen twice.
@@ -78,12 +78,22 @@
             .into_iter()
             .collect();
 
+        let user_cfg: toml::Value = toml::from_str(
+            r#"
+            [[announcements]]
+            id = "live"
+            title = "Local outage"
+            message = "from user config"
+            severity = "critical"
+            "#,
+        )
+        .unwrap();
         apply_announcements_update(
             &mut app,
             1,
             &[critical_announcement("live")],
             None,
-            None,
+            Some(&user_cfg),
             None,
         );
 
@@ -112,25 +122,31 @@
     #[test]
     fn announcements_update_new_critical_id_rearms_hidden_banner() {
         let mut app = make_app_with_agent("sess-ann");
-        apply_announcements_update(
-            &mut app,
-            1,
-            &[critical_announcement("outage-a")],
-            None,
-            None,
-            None,
-        );
+        let cfg_a: toml::Value = toml::from_str(
+            r#"
+            [[announcements]]
+            id = "outage-a"
+            title = "Outage A"
+            message = "from user config"
+            severity = "critical"
+            "#,
+        )
+        .unwrap();
+        apply_announcements_update(&mut app, 1, &[], None, Some(&cfg_a), None);
         app.hidden_announcement_ids.insert("outage-a".to_string());
         assert_eq!(shown_banner_id(&app), None);
 
-        apply_announcements_update(
-            &mut app,
-            2,
-            &[critical_announcement("outage-b")],
-            None,
-            None,
-            None,
-        );
+        let cfg_b: toml::Value = toml::from_str(
+            r#"
+            [[announcements]]
+            id = "outage-b"
+            title = "Outage B"
+            message = "from user config"
+            severity = "critical"
+            "#,
+        )
+        .unwrap();
+        apply_announcements_update(&mut app, 2, &[], None, Some(&cfg_b), None);
 
         assert_eq!(app.announcements_last_gen, 2);
         assert_eq!(
@@ -177,8 +193,8 @@
             .collect();
         assert_eq!(
             ids,
-            ["live", "cfg-crit"],
-            "config-layer announcement must survive the push (remote > user order)"
+            ["cfg-crit"],
+            "config-layer announcement must survive; remote xAI id=live is ignored"
         );
         assert!(
             app.hidden_announcement_ids.contains("cfg-crit"),
@@ -192,10 +208,27 @@
             app.pending_effects
         );
         assert_eq!(
-            shown_banner_id(&app).as_deref(),
-            Some("live"),
-            "pushed critical shows; the hidden config-layer one stays skipped"
+            shown_banner_id(&app),
+            None,
+            "remote push ignored; hidden config-layer critical stays skipped"
         );
+    }
+
+    /// xAI `/v1/settings` + ACP `announcements/update` marketing must not
+    /// paint in FreeGrok (the "Grok 4.5 is here" welcome ad).
+    #[test]
+    fn remote_xai_marketing_announcement_is_ignored() {
+        let mut app = make_app_with_agent("sess-ann");
+        let mut promo = critical_announcement("promo");
+        promo.title = Some("Grok 4.5 is here. Upgrade now.".into());
+        promo.message = Some("Upgrade now.".into());
+        apply_announcements_update(&mut app, 1, &[promo], None, None, None);
+        assert!(
+            app.active_announcements.is_empty(),
+            "remote marketing must not reach welcome: {:?}",
+            app.active_announcements
+        );
+        assert_eq!(shown_banner_id(&app), None);
     }
 
     /// A mid-session push must open the `/announcements` gate on already-live
@@ -212,14 +245,17 @@
             "gate starts closed"
         );
 
-        apply_announcements_update(
-            &mut app,
-            1,
-            &[critical_announcement("outage-a")],
-            None,
-            None,
-            None,
-        );
+        let user_cfg: toml::Value = toml::from_str(
+            r#"
+            [[announcements]]
+            id = "outage-a"
+            title = "Outage"
+            message = "from user config"
+            severity = "critical"
+            "#,
+        )
+        .unwrap();
+        apply_announcements_update(&mut app, 1, &[], None, Some(&user_cfg), None);
 
         let agent = &app.agents[&AgentId(0)];
         assert!(

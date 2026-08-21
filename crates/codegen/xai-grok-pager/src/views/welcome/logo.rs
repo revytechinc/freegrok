@@ -12,8 +12,8 @@ use ratatui::widgets::{Paragraph, Widget};
 use crate::render::color::blend_color;
 use crate::theme::Theme;
 
-const LOGO: &str = include_str!("../../../assets/logo/logo07.txt");
-const LOGO_SMALL: &str = include_str!("../../../assets/logo/logo05.txt");
+const LOGO: &str = include_str!("../../../assets/brand/freegrok/logo-full.txt");
+const LOGO_SMALL: &str = include_str!("../../../assets/brand/freegrok/logo-small.txt");
 
 /// Height at or above which the small logo is shown (below it, no logo).
 const SMALL_LOGO_MIN_HEIGHT: u16 = 22;
@@ -217,6 +217,29 @@ pub fn render_compact_logo(area: Rect, buf: &mut Buffer, theme: &Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn freegrok_logo_is_not_the_grok_mascot() {
+        const GROK_FACE: &str = "⣠⣾⠿";
+        assert!(
+            !LOGO.contains(GROK_FACE),
+            "full logo still contains the xAI Grok face canary"
+        );
+        assert!(
+            !LOGO_SMALL.contains(GROK_FACE),
+            "small logo still contains the xAI Grok face canary"
+        );
+        const FG_CANARY: &str = "⣶⠉⠉⠉⠶";
+        assert!(
+            LOGO.contains(FG_CANARY),
+            "full logo missing FreeGrok FG canary {FG_CANARY}"
+        );
+        const FG_SMALL_CANARY: &str = "⡗⠒⠀⡇⠒⡄";
+        assert!(
+            LOGO_SMALL.contains(FG_SMALL_CANARY),
+            "small logo missing FreeGrok FG canary {FG_SMALL_CANARY}"
+        );
+    }
 
     #[test]
     fn logo_sizes_by_height() {

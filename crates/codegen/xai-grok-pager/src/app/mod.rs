@@ -513,7 +513,7 @@ pub fn join_early_prefetch(
     let handle = handle?;
     if handle.is_finished() {
         return match handle.join() {
-            Ok(r) => r.settings,
+            Ok(r) => r.settings.map(|s| s.without_remote_marketing()),
             Err(_) => None,
         };
     }
@@ -522,7 +522,7 @@ pub fn join_early_prefetch(
         let _ = tx.send(handle.join());
     });
     match rx.recv_timeout(std::time::Duration::from_secs(2)) {
-        Ok(Ok(r)) => r.settings,
+        Ok(Ok(r)) => r.settings.map(|s| s.without_remote_marketing()),
         _ => None,
     }
 }
@@ -2306,7 +2306,7 @@ mod tests {
     #[test]
     fn cli_command_name_is_grok() {
         use clap::CommandFactory;
-        assert_eq!(PagerArgs::command().get_name(), "grok");
+        assert_eq!(PagerArgs::command().get_name(), "freegrok");
     }
     #[test]
     fn cli_help_output_header() {
@@ -2316,9 +2316,9 @@ mod tests {
         assert_eq!(
             first_5,
             vec![
-                "Grok Build TUI",
+                "FreeGrok",
                 "",
-                "Usage: grok [OPTIONS] [PROMPT] [COMMAND]",
+                "Usage: freegrok [OPTIONS] [PROMPT] [COMMAND]",
                 "",
                 "Arguments:",
             ]

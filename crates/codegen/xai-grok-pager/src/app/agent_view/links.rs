@@ -775,7 +775,11 @@ mod link_click_tests {
                     .collect::<String>()
             })
             .collect();
-        assert!(text.contains("Help improve Grok"), "banner copy painted");
+        assert!(text.contains("Data sharing"), "banner copy painted");
+        assert!(
+            !text.contains("Help improve Grok"),
+            "xAI Grok upsell must not paint"
+        );
         assert!(
             !text.contains("ZZCRIT"),
             "critical announcement yields the slot to the privacy banner"

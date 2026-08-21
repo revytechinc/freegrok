@@ -13,6 +13,8 @@ use std::path::PathBuf;
 
 /// CDN base for all changelogs (proxies to GCS, cache-friendly).
 const CHANGELOG_BASE: &str = "https://x.ai/cli/changelogs";
+/// FreeGrok must not pull xAI CLI release notes. Flip when we host our own.
+const FREEGROK_CHANGELOG_CDN: bool = false;
 const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// A single structured changelog entry from the published JSON changelog.
@@ -200,8 +202,16 @@ impl ChangelogManager {
 
 /// When set, `ChangelogManager::fetch` skips the CDN and only reads disk cache.
 /// Used by PTY harness tests that seed `CHANGELOG.{md,json}` under a temp home.
+/// FreeGrok also skips the xAI CDN at compile time ([`FREEGROK_CHANGELOG_CDN`]).
 fn changelog_offline() -> bool {
-    std::env::var_os("GROK_CHANGELOG_OFFLINE").is_some_and(|v| !v.is_empty() && v != "0")
+    if !FREEGROK_CHANGELOG_CDN {
+        return true;
+    }
+    let grok =
+        std::env::var_os("GROK_CHANGELOG_OFFLINE").is_some_and(|v| !v.is_empty() && v != "0");
+    let fg =
+        std::env::var_os("FREEGROK_CHANGELOG_OFFLINE").is_some_and(|v| !v.is_empty() && v != "0");
+    grok || fg
 }
 
 fn read_cache(path: &std::path::Path) -> Option<String> {
@@ -253,6 +263,22 @@ mod tests {
             md_cache: home.join("CHANGELOG.md"),
             json_cache: home.join("CHANGELOG.json"),
         }
+    }
+
+    #[test]
+    fn freegrok_changelog_cdn_is_compile_time_off() {
+        assert!(
+            !FREEGROK_CHANGELOG_CDN,
+            "FreeGrok must not fetch https://x.ai/cli/changelogs"
+        );
+        assert!(
+            changelog_offline(),
+            "ChangelogManager::fetch must skip the xAI CDN"
+        );
+        assert!(
+            CHANGELOG_BASE.starts_with("https://x.ai/"),
+            "CDN constant is still the upstream URL; keep it unused"
+        );
     }
 
     #[test]

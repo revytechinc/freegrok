@@ -57,11 +57,17 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
     // dismissal and the leader re-nudges every new session. Idempotent in
     // embedded mode, where the in-process agent seeds the same cache.
     if let Some(campaigns) = update.campaigns.clone() {
-        let rs = xai_grok_shell::util::config::RemoteSettings {
-            campaigns,
-            ..Default::default()
-        };
-        xai_grok_shell::util::config::set_remote_campaigns_from_settings(Some(&rs));
+        if xai_grok_shell::util::config::ignore_remote_marketing() {
+            xai_grok_shell::util::config::set_remote_campaigns_from_settings(Some(
+                &xai_grok_shell::util::config::RemoteSettings::default(),
+            ));
+        } else {
+            let rs = xai_grok_shell::util::config::RemoteSettings {
+                campaigns,
+                ..Default::default()
+            };
+            xai_grok_shell::util::config::set_remote_campaigns_from_settings(Some(&rs));
+        }
     }
 
     if let Some(v) = update.auto_permission_mode_enabled {
@@ -127,8 +133,13 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
     // (sent for kill-switch semantics) clobbers a local test override
     // moments after launch.
     if let Some(v) = update.privacy_notice_rollout {
-        app.privacy_notice_rollout =
-            xai_grok_config::env_bool("GROK_PRIVACY_NOTICE_ROLLOUT").unwrap_or(v);
+        // FreeGrok ignores xAI's training-upsell rollout; env still wins for tests.
+        app.privacy_notice_rollout = xai_grok_config::env_bool("GROK_PRIVACY_NOTICE_ROLLOUT")
+            .unwrap_or(if xai_grok_shell::util::config::ignore_remote_marketing() {
+                false
+            } else {
+                v
+            });
     }
     if let Some(v) = update.privacy_banner_reshow_days {
         app.privacy_banner_reshow_days = Some(
@@ -193,7 +204,9 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
         app.session_picker_grouped = resolved;
     }
     if let Some(v) = update.subscription_watch_interval_secs {
-        app.subscription_watch_interval_secs = Some(v);
+        if !xai_grok_shell::util::config::ignore_remote_marketing() {
+            app.subscription_watch_interval_secs = Some(v);
+        }
     }
 
     // Gate update logic:
@@ -342,8 +355,12 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
         let effective_config = xai_grok_shell::config::load_effective_config().ok();
         let empty_toml = toml::Value::Table(Default::default());
         let tags_config = effective_config.as_ref().unwrap_or(&empty_toml);
-        *app.command_tags.borrow_mut() =
-            resolve_slash_command_tags(tags_config, remote_tags.as_ref());
+        let remote = if xai_grok_shell::util::config::ignore_remote_marketing() {
+            None
+        } else {
+            remote_tags.as_ref()
+        };
+        *app.command_tags.borrow_mut() = resolve_slash_command_tags(tags_config, remote);
     }
 
     tracing::info!("settings updated via x.ai/settings/update");

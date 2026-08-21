@@ -83,6 +83,11 @@ pub fn resolve_tips(
     let req = requirements.and_then(tips_from_toml);
     let usr = user.and_then(tips_from_toml);
     let mgd = managed.and_then(tips_from_toml);
+    let remote_tips = if xai_grok_config_types::ignore_remote_marketing() {
+        None
+    } else {
+        remote_tips
+    };
 
     // Priority: requirements > remote > user > managed.
     merge_tips(req, usr, mgd, remote_tips)
@@ -234,6 +239,20 @@ mod tests {
         let json = r#"{"tips": ["a", "b"]}"#;
         let s: RemoteSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.tips, Some(vec!["a".to_string(), "b".to_string()]));
+    }
+
+    #[test]
+    fn resolve_tips_ignores_remote_xai_marketing() {
+        assert!(xai_grok_config_types::FREEGROK_IGNORE_REMOTE_MARKETING);
+        let remote = vec![
+            "Try SuperGrok".to_string(),
+            "Upgrade to Grok 4.5".to_string(),
+        ];
+        let got = resolve_tips(None, None, None, Some(&remote));
+        assert!(
+            got.is_empty(),
+            "xAI tips[] must not appear in FreeGrok: {got:?}"
+        );
     }
 
     // Hermetic: drive the resolver through `_with_env` with an EXPLICIT env map

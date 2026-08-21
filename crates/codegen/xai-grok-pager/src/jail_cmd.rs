@@ -239,7 +239,7 @@ async fn run_setup(json: bool, full: bool, base: Option<String>, apply: bool) ->
         return Ok(());
     }
 
-    println!("Jail setup (dry-run) — optional for Grok TUI");
+    println!("Jail setup (dry-run) — optional for FreeGrok TUI");
     println!(
         "  Scope:    {}",
         match plan.scope {

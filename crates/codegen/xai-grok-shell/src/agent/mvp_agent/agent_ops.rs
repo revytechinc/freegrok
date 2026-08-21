@@ -1586,7 +1586,7 @@ impl MvpAgent {
         settings: crate::util::config::RemoteSettings,
     ) {
         let mut cfg = self.cfg.borrow_mut();
-        cfg.remote_settings = Some(settings);
+        cfg.remote_settings = Some(settings.without_remote_marketing());
         crate::util::config::sync_campaign_fields(&mut cfg);
         if let Some(v) = cfg
             .remote_settings

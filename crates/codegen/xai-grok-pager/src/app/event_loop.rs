@@ -1046,9 +1046,13 @@ pub(crate) async fn run(
     app.sharing_enabled = false;
     app.privacy_notice_rollout = xai_grok_config::env_bool("GROK_PRIVACY_NOTICE_ROLLOUT")
         .or_else(|| {
-            remote_settings
-                .as_ref()
-                .and_then(|s| s.privacy_notice_rollout)
+            if xai_grok_shell::util::config::ignore_remote_marketing() {
+                None
+            } else {
+                remote_settings
+                    .as_ref()
+                    .and_then(|s| s.privacy_notice_rollout)
+            }
         })
         .unwrap_or(false);
     app.privacy_banner_reshow_days = std::env::var("GROK_PRIVACY_BANNER_RESHOW_DAYS")
@@ -1067,9 +1071,13 @@ pub(crate) async fn run(
                 .privacy
                 .privacy_banner_acked
         });
-    app.plugin_cta_enabled = xai_grok_config::env_bool("GROK_PLUGIN_CTA")
-        .or_else(|| remote_settings.as_ref().and_then(|s| s.plugin_cta))
-        .unwrap_or(false);
+    app.plugin_cta_enabled = if xai_grok_shell::util::config::ignore_remote_marketing() {
+        false
+    } else {
+        xai_grok_config::env_bool("GROK_PLUGIN_CTA")
+            .or_else(|| remote_settings.as_ref().and_then(|s| s.plugin_cta))
+            .unwrap_or(false)
+    };
     app.workspace_dashboard_enabled = xai_grok_config::env_bool("GROK_WORKSPACE_DASHBOARD")
         .or_else(|| {
             remote_settings
@@ -1369,9 +1377,13 @@ pub(crate) async fn run(
 
         // Slash-command dropdown tags: remote base, local [slash_command_tags]
         // wins per key. Mutate the shared map in place so every adopter sees it.
-        let remote_slash_tags = remote_settings
-            .as_ref()
-            .and_then(|s| s.slash_command_tags.as_ref());
+        let remote_slash_tags = if xai_grok_shell::util::config::ignore_remote_marketing() {
+            None
+        } else {
+            remote_settings
+                .as_ref()
+                .and_then(|s| s.slash_command_tags.as_ref())
+        };
         let empty_toml = toml::Value::Table(Default::default());
         let tags_config = effective_config.as_ref().unwrap_or(&empty_toml);
         *app.command_tags.borrow_mut() = resolve_slash_command_tags(tags_config, remote_slash_tags);

@@ -35,6 +35,6 @@ pub use tips::*;
 pub use worktree::*;
 pub use xai_grok_config_types::{
     CampaignOverride, ConsentGate, ContextualHintsRemote, DisplayRefreshSettings,
-    DoomLoopRecoverySettings, GoalRoleModel, RemoteSettings, WorktreeAutoGcSettings,
-    WorktreeKindMaxAge, deserialize_tolerant,
+    DoomLoopRecoverySettings, FREEGROK_IGNORE_REMOTE_MARKETING, GoalRoleModel, RemoteSettings,
+    WorktreeAutoGcSettings, WorktreeKindMaxAge, deserialize_tolerant, ignore_remote_marketing,
 };
